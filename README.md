@@ -11,7 +11,7 @@ A repository for computing the thermal Sunyaev-Zel'dovich (tSZ) power spectrum a
 ## Key Features
 - **tSZ Power Spectrum Computation**: Fast calculation of the tSZ power spectrum using JAX for GPU acceleration.
 - **Cosmological Parameter Inference**:
-  - Traditional MCMC sampling with `emcee`
+  - Traditional MCMC sampling with `cobaya`
   - Modern simulation-based inference (SBI) with neural density estimators
 - **JAX-powered**: Automatic differentiation and hardware acceleration (CPU/GPU/TPU) support.
 - **Modular Design**: Easily extensible for testing different cosmological models or inference methods.
