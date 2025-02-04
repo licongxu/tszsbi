@@ -6,6 +6,8 @@ import jax.scipy as jscipy
 from jax.scipy.interpolate import RegularGridInterpolator
 import mcfit
 from mcfit import TophatVar
+from .utils import get_ell_range
+
 
 # Import the shared classy_sz from the package
 from . import classy_sz
@@ -46,7 +48,7 @@ def window_function(x, x_min, x_max):
     Since the integral is between x_min and x_max
     """
 
-    return np.where((x >= x_min) & (x <= x_max), 1.0, 0.0)
+    return jnp.where((x >= x_min) & (x <= x_max), 1.0, 0.0)
 
 def hankel_integrand(x, z, m, x_min=1e-6, x_max=4, params_values_dict = None):
     """
@@ -112,6 +114,12 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
 
     return prefactor
 
+# # Define x in logarithmic space
+# x_array = np.logspace(jnp.log10(1e-6), jnp.log10(6e2), num=256)  # Avoid x = 0 to prevent divergence
+# # Hankel transform with JAX
+# H = mcfit.Hankel(x_array, nu=0.5, lowring=True, backend='jax') 
+# H_jit = jax.jit(functools.partial(H, extrap=False))
+
 def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
 
     rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
@@ -120,7 +128,8 @@ def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
     prefactor = y_ell_prefactor(z, m, params_values_dict=params_values_dict)
     # print(prefactor)
     # Define x in logarithmic space
-    x = jnp.logspace(jnp.log10(1e-6), jnp.log10(6e2), num=128)  # Avoid x = 0 to prevent divergence
+    x = jnp.logspace(jnp.log10(1e-6), jnp.log10(6e2), num=256)  # Avoid x = 0 to prevent divergence
+    x = jnp.array(x)
 
     integrand = hankel_integrand(x, z, m, x_min=1e-6, x_max=4, params_values_dict=params_values_dict)
     # print(integrand)
@@ -168,25 +177,27 @@ def y_ell_interpolate(z, m, params_values_dict = None):
     Interpolate y_ell values onto a uniform ell grid for multiple m values.
     """
     # Get cosmological parameters
-    rparams = classy_sz.pars
-    l_min = rparams['ell_min']
-    l_max = rparams['ell_max']
-    dlogell = rparams['dlogell']
+    # rparams = classy_sz.pars
+    # l_min = rparams['ell_min']
+    # l_max = rparams['ell_max']
+    # dlogell = rparams['dlogell']
 
 
-    log10_l_min = jnp.log10(l_min)
-    log10_l_max = jnp.log10(l_max)
-    num = int((log10_l_max - log10_l_min) / dlogell) + 1
+    # log10_l_min = jnp.log10(l_min)
+    # log10_l_max = jnp.log10(l_max)
+    # num = jnp.array(((log10_l_max - log10_l_min) / dlogell) + 1, int)
     # print(num)
 
     # Compute the complete y_ell values
     ell_nointer_list, y_ell_nointer_list = y_ell_complete(z, m, params_values_dict = params_values_dict)
 
     # Define evaluation ell values (uniform grid)
-    ell_eval = jnp.logspace(log10_l_min, log10_l_max, num=num)
+    # ell_eval = jnp.logspace(log10_l_min, log10_l_max, num=num)
+    ell_eval = get_ell_range()
 
     # Interpolator function for a single m
     def interpolate_single(ell_nointer, y_ell_nointer):
+        # interpolator = RegularGridInterpolator((ell_nointer,), y_ell_nointer, method='linear', bounds_error=False, fill_value=None)
         interpolator = RegularGridInterpolator((ell_nointer,), y_ell_nointer, method='linear', bounds_error=False, fill_value=None)
         return interpolator(ell_eval)
 
@@ -195,6 +206,7 @@ def y_ell_interpolate(z, m, params_values_dict = None):
 
     # Perform the interpolation
     y_ell_eval_list = interpolate_all(ell_nointer_list, y_ell_nointer_list)
+    # print(ell_eval)
 
     return ell_eval, y_ell_eval_list
 

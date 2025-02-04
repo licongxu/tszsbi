@@ -1,7 +1,7 @@
-from classy_sz import Class as Class_sz
+from .config import classy_sz
+from .warmup import warmup  
 
-# Create a single shared instance of Class_sz
-classy_sz = Class_sz()
+warmup()
 
 # Import and re-export functions/classes from submodules:
 from .profiles import (

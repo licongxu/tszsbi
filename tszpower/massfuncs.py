@@ -1,9 +1,9 @@
 import jax
 import jax.numpy as jnp
 import jax.scipy as jscipy
-
 from mcfit import TophatVar
 from . import classy_sz
+
 
 def MF_T08(sigmas, z, delta_mean):
     # Convert delta_mean to log scale

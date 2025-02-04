@@ -1,0 +1,108 @@
+output: chains/tszpower_chain
+logging_level: 2  
+
+theory:
+  tszpower_cobaya_theory.tSZ_PS_Theory:
+    foreground_template_directory: "data"
+    foreground_template_file: "data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"
+    # ell_pivot_cib: 300.0
+
+likelihood:
+  tszpower_cobaya_likelihood.tSZ_PS_Likelihood:
+    data_directory: "data"
+    data_file: "data_ps-ell-y2-erry2_total-planck-collab-15.txt"
+    cov_file: null
+
+params:
+  H0:
+    prior:
+      min: 65.
+      max: 75.
+    proposal: 0.6
+    latex: "H_0"
+
+  ln10_10A_s:
+    prior:
+      min: 2.5
+      max: 3.5
+    proposal: 0.02
+    latex: "\\ln(10^{10}A_s)"
+
+  n_s:
+    prior:
+      min: 0.94
+      max: 1.0
+    proposal: 0.0044
+    latex: "n_s"
+
+  omega_b:
+    prior:
+      min: 0.0199
+      max: 0.0245
+    proposal: 0.00015
+    latex: "\\Omega_b h^2"
+
+  omega_cdm:
+    prior:
+      min: 0.09
+      max: 0.15
+    proposal: 0.0014
+    latex: "\\Omega_c h^2"
+
+  tau_reio:
+    prior:
+      min: 0.04
+      max: 0.12
+    latex: "\\tau_{reio}"
+
+  B:
+    prior:
+      min: 1.11
+      max: 1.67
+    proposal: 0.17
+    latex: "B"
+
+  A_cib:
+    prior:
+      min: 0.0
+      max: 10.0
+    proposal: 0.16
+    latex: "A_{cib}"
+
+  A_ir:
+    prior:
+      min: 0.0
+      max: 10.0
+    proposal: 0.18
+    latex: "A_{ir}"
+
+  A_rs:
+    prior:
+      min: 0.0
+      max: 10.0
+    proposal: 0.34
+    latex: "A_{rs}"
+
+  A_sz:
+    value: 1.0
+    latex: "A_{sz}"
+
+
+# sampler:
+#   mcmc:
+#     max_samples: 200
+#     covmat: auto
+#     Rminus1_stop: 0.01
+#     learn_proposal: True
+#     proposal_scale: 2.4
+# timing: true
+sampler:
+  mcmc:
+    Rminus1_stop: 0.1
+    burn_in: 50
+    learn_proposal: True
+    covmat: null 
+    # proposal_scale: 2.4
+
+
+timing: true
