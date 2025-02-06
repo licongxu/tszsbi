@@ -128,7 +128,7 @@ def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
     prefactor = y_ell_prefactor(z, m, params_values_dict=params_values_dict)
     # print(prefactor)
     # Define x in logarithmic space
-    x = jnp.logspace(jnp.log10(1e-6), jnp.log10(6e2), num=256)  # Avoid x = 0 to prevent divergence
+    x = jnp.logspace(jnp.log10(1e-6), jnp.log10(6e2), num=128)  # Avoid x = 0 to prevent divergence
     x = jnp.array(x)
 
     integrand = hankel_integrand(x, z, m, x_min=1e-6, x_max=4, params_values_dict=params_values_dict)

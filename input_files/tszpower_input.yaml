@@ -1,0 +1,161 @@
+output: chains/tszpower_chain
+logging_level: 2  
+
+theory:
+  tszpower_cobaya_theory.tSZ_PS_Theory:
+    foreground_template_directory: "data"
+    foreground_template_file: "data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"
+    # ell_pivot_cib: 300.0
+
+likelihood:
+  tszpower_cobaya_likelihood.tSZ_PS_Likelihood:
+    data_directory: "data"
+    data_file: "data_ps-ell-y2-erry2_total-planck-collab-15.txt"
+    cov_file: null
+
+params:
+  H0:
+    prior:
+      min: 55.
+      max: 90.
+    ref:
+      dist: norm
+      loc: 67.27
+      scale: 0.6
+    proposal: 0.6
+    latex: H_0
+
+  ln10_10A_s:
+    prior:
+      max: 3.5
+      min: 2.5
+    proposal: 0.12892144
+    ref:
+      dist: norm
+      loc: 2.9939341
+      scale: 0.12892144
+    latex: "\\ln(10^{10}A_s)"
+
+
+  # n_s:
+  #   prior:
+  #     min: 0.94
+  #     max: 1.
+  #   ref:
+  #     dist: norm
+  #     loc: 0.965
+  #     scale: 0.0044
+  #   proposal: 0.0044
+  #   latex: n_\mathrm{s}
+  n_s:
+    value: 0.965
+    latex: n_\mathrm{s}
+
+  omega_b:
+    value: 0.0224
+    latex: "\\Omega_b h^2"
+  # omega_b:
+  #   prior:
+  #     min: 0.02
+  #     max: 0.025
+  #   ref:
+  #     dist: norm
+  #     loc: 0.0224
+  #     scale: 0.00015
+  #   proposal: 0.00015
+  #   latex: \Omega_\mathrm{b} h^2
+
+  omega_cdm:
+    prior:
+      min: 0.11
+      max: 0.13
+    ref:
+      dist: norm
+      loc: 0.1202
+      scale: 0.0014
+    proposal: 0.0014
+    latex: \Omega_\mathrm{c} h^2
+
+
+
+  # tau_reio:
+  #   prior:
+  #     min: 0.04
+  #     max: 0.12
+  #   latex: "\\tau_{reio}"
+  tau_reio:
+    value: 0.054
+    latex: "\\tau_{reio}"
+
+
+  B:
+    prior:
+      min: 1.0
+      max: 2.0
+    ref:
+      dist: norm
+      loc: 1.4
+      scale: 0.2
+    proposal: 0.2
+    latex: B
+  # B:
+  #   value: 1.0
+  #   latex: B
+
+
+  A_cib:
+    prior:
+      min: 0
+      max: 5
+    ref:
+      dist: norm
+      loc: 0.66
+      scale: 0.16
+    proposal: 0.16
+    latex: A_\mathrm{CIB}
+  # A_cib:
+  #   value: 0.36
+  #   latex: A_\mathrm{CIB}
+
+  A_ir:
+    prior:
+        min: 0
+        max: 5
+    ref:
+      dist: norm
+      loc: 2.04
+      scale: 0.18
+    proposal: 0.18
+    latex: A_\mathrm{IR}
+  # A_ir:
+  #   value: 1.78
+  #   latex: A_\mathrm{IR}
+
+  A_rs:
+    prior:
+      min: 0
+      max: 5
+    ref:
+      dist: norm
+      loc: 0.004
+      scale: 0.34
+    proposal: 0.34
+    latex: A_\mathrm{RS}
+  # A_rs:
+  #   value: 0.30
+  #   latex: A_\mathrm{RS}
+
+  A_sz:
+    value: 1.0
+    latex: "A_{sz}"
+
+sampler:
+  mcmc:
+    Rminus1_stop: 0.1
+    burn_in: 50
+    learn_proposal: True
+    covmat: tszpower_chain_full.covmat
+    proposal_scale: 1.9
+
+
+timing: true

@@ -10,6 +10,7 @@ import tszpower
 import jax.numpy as jnp
 import numpy as np
 import os
+import time
 
 class tSZ_PS_Theory(Theory):
     # Declare the outputs.
@@ -55,20 +56,25 @@ class tSZ_PS_Theory(Theory):
         self._current_state = {}
 
         # --- Fixed astrophysical parameters (and other fixed settings) ---
+        # Cosmology is Planck 2018
         self.fixed_params = {
+            # "omega_b":  0.0224, 
+            # "n_s": 0.965,
+            # "tau_reio": 0.054,
             "M_min": 1e11,
             "M_max": 5e15,
-            "ell_min": 10,
-            "ell_max": 959.5,
-            "dlogell": 0.114,
-            "z_min": 1e-6,
-            "z_max": 6.0,
+            # "ell_min": 10,
+            # "ell_max": 959.5,
+            # "dlogell": 0.114,
+            "z_min": 5e-3,
+            "z_max": 3.0,
             "P0GNFW": 8.130,
             "c500": 1.156,
             "gammaGNFW": 0.3292,
             "alphaGNFW": 1.0620,
             "betaGNFW": 5.4807,
-            "jax": 1
+            "jax": 1,
+            "cosmo_model": 1, 
         }
 
         # --- Load the foreground template data once during initialization ---
@@ -104,24 +110,32 @@ class tSZ_PS_Theory(Theory):
 
     def calculate(self, state, want_derived=True, **params_values):
         # 1) Build the complete parameter dictionary.
+        start_time = time.time()
         allpars = {
-            "omega_b": params_values["omega_b"],
+            # "omega_b": params_values["omega_b"],
             "omega_cdm": params_values["omega_cdm"],
             "H0": params_values["H0"],
-            "tau_reio": params_values["tau_reio"],
+            # "tau_reio": params_values["tau_reio"],
             "ln10^{10}A_s": params_values["ln10_10A_s"],
-            "n_s": params_values["n_s"],
+            # "n_s": params_values["n_s"],
             "B": params_values["B"]
         }
+
         allpars.update(self.fixed_params)
 
         # 2) Setup tszpower.
+        # print("Cobaya input parameters:", allpars)
         tszpower.classy_sz.set(allpars)
+        # tszpower.warmup()
         tszpower.classy_sz.compute_class_szfast()
+        
         ell = tszpower.get_ell_range()
 
         # 3) Compute the tSZ power spectrum.
-        C_ell = tszpower.compute_integral(allpars) * ell * (ell + 1) / (2 * jnp.pi) * 1e12
+
+        C_ell = tszpower.compute_integral(params_values_dict=allpars) * ell * (ell + 1) / (2 * jnp.pi) * 1e12
+        # print("C_ell:", C_ell)
+        
 
         # 4) Scale the tSZ power spectrum by the nuisance amplitude A_sz.
         tsz_component = params_values["A_sz"] * C_ell
@@ -149,6 +163,8 @@ class tSZ_PS_Theory(Theory):
             state["derived"] = {}
 
         self.log.info("tSZ power spectrum (including foregrounds) computed with current parameters")
+        end_time = time.time()
+        print(f"compute_integral took {end_time - start_time:.4f} seconds")
 
     def get_tsz_power_spectrum(self):
         return self._current_state.get("tsz_power_spectrum", None)
