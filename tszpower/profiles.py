@@ -26,8 +26,8 @@ def gnfw_pressure_profile(x, z, m, params_values_dict = None):
 
     # GNFW prefactor
     B = rparams['B']    
-    m_delta_tilde = (m / B)/h # convert to M_sun 
-    C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * ((h / 0.7) * m_delta_tilde / (3e14))**(2 / 3 + 0.12) # eV cm^-3
+    m_delta_tilde = (m / B) # convert to M_sun 
+    C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * (m_delta_tilde / (0.7 * 3e14))**(2 / 3 + 0.12) * (0.7/h)**1.5 # eV cm^-3
     c500 = rparams['c500']
     gamma = rparams['gammaGNFW']
     alpha = rparams['alphaGNFW']
@@ -91,7 +91,8 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
     rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
     # rparams = classy_sz.pars
     h = rparams['H0']/100
-
+    B = rparams['B']
+    
     # print(rparams)
     me_in_eV = 510998.95 # electron mass in eV/c^2
     # me_in_eV = 511000 # electron mass in eV/c^2
@@ -101,7 +102,7 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
 
     dAz = classy_sz.get_angular_distance_at_z(z,params_values_dict = params_values_dict)*h
     # dAz = classy_sz.get_angular_distance_at_z(z,params_values_dict = params_values_dict)/(1+z)*h # in Mpc/h
-    r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict = params_values_dict)  # in Mpc/h
+    r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict = params_values_dict)/(B**(1/3))  # in Mpc/h
     ell_delta = dAz/r_delta
     # print(ell_delta)
     h = rparams['H0']/100
@@ -124,6 +125,7 @@ def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
 
     rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
     h = rparams['H0']/100
+    B = rparams['B']
     
     prefactor = y_ell_prefactor(z, m, params_values_dict=params_values_dict)
     # print(prefactor)
@@ -146,7 +148,7 @@ def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
     # dAz = classy_sz.get_angular_distance_at_z(z,params_values_dict = params_values_dict)/(1+z)*h # in Mpc/h
 
     delta = 500
-    r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict = params_values_dict)  # in Mpc/h
+    r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict = params_values_dict)/(B**(1/3))  # in Mpc/h
     # print(r_delta)
     ell_delta = dAz/r_delta
     # print(ell_delta)
