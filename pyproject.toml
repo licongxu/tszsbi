@@ -29,7 +29,10 @@ dependencies = [
     "jaxlib",
     "emcee",
     "sbi",
-    "pyyaml"
+    "pyyaml",
+    "classy_sz",
+    "cobaya",
+    "getdist"
 ]
 
 [project.optional-dependencies]
