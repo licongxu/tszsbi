@@ -25,7 +25,7 @@ likelihood:
   tszpower_cobaya_likelihood.tSZ_PS_Likelihood:
     data_directory: data
     data_file: data_ps-ell-y2-erry2_total-planck-collab-15.txt
-    use_covariance: false
+    use_covariance: true
     cov_file: null
     type: []
     speed: -1
