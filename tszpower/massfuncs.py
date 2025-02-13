@@ -4,6 +4,21 @@ import jax.scipy as jscipy
 from mcfit import TophatVar
 from . import classy_sz
 
+# =============================================================================
+# Precompute a default k-grid and pre-create TophatVar instances.
+# We use a fixed redshift (z=1.0) and the default configuration from classy_sz.
+# These values will be treated as static (i.e. concrete) so that when later functions
+# are jitted, they do not try to trace through the constructor.
+# =============================================================================
+
+_default_params = classy_sz.get_all_relevant_params()  # default configuration
+# print(_default_params)
+# Get the k-grid at z=1 (we ignore the pks returned here)
+_, _ks = classy_sz.get_pkl_at_z(1.0, params_values_dict=_default_params)
+# Pre-create TophatVar instances with these concrete values.
+_tophat_instance = TophatVar(_ks, lowring=True, backend='jax')
+_tophat_d_instance = TophatVar(_ks, lowring=True, backend='jax', deriv=1)
+
 
 def MF_T08(sigmas, z, delta_mean):
     # Convert delta_mean to log scale
@@ -47,32 +62,67 @@ def get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = None)
     P = jax.vmap(get_pks_for_z)(z_grid).T
 
     # Vectorize the TophatVar function over `z_grid`
-    def compute_tophat_var(pks, ks):
-        _, var_z = TophatVar(ks, lowring=True, backend='jax')(pks, extrap=True)
-        return var_z
+    # def compute_tophat_var(pks, ks):
+    #     _, var_z = TophatVar(ks, lowring=True, backend='jax')(pks, extrap=True)
+    #     return var_z
+    
+    # Define a helper that calls the precompiled transform.
+    # _tophat = TophatVar(ks, lowring=True, backend='jax')
+    # def _compute_tophat_var_single(pks):
+    #     # Here, _tophat was already constructed with concrete ks.
+    #     _, var_z = _tophat(pks, extrap=True)
+    #     return var_z
+
+    # -------------------------------------------------------------------------
+    # 2. Compute variance and its derivative using pre-created TophatVar instances.
+    # -------------------------------------------------------------------------
+    # Use _tophat_instance for the variance.
+    var = jax.vmap(lambda pks: _tophat_instance(pks, extrap=True)[1], in_axes=1)(P)
+    # Use _tophat_d_instance for the derivative.
+    # (Note: Here we multiply pks by _ks; _ks is the k-grid used to create the instance.)
+    dvar = jax.vmap(lambda pks: _tophat_d_instance(pks * _ks, extrap=True)[1], in_axes=1)(P)
+
+
 
     # Apply the function to each column of P
-    var = jax.vmap(compute_tophat_var, in_axes=(1, None))(P, ks)
+    # var = jax.vmap(compute_tophat_var, in_axes=(1, None))(P, ks)
+
+    # Now vectorize _compute_tophat_var_single over the appropriate axis.
+    # (Assuming that P has shape (n_k, n_z) and we want to loop over its columns.)
+    # var = jax.vmap(_compute_tophat_var_single, in_axes=1)(P)
 
 
-    # Vectorize the TophatVar function over `z_grid`
-    def compute_tophat_dvar(pks, ks):
-        _, var_z = TophatVar(ks, lowring=True, backend='jax',deriv=1)(pks*ks, extrap=True)
-        # cosmocnc:  TophatVar(self.k,lowring=True,deriv=1)(self.pk*self.k,extrap=True)
-        return var_z
+    # # Vectorize the TophatVar function over `z_grid`
+    # def compute_tophat_dvar(pks, ks):
+    #     _, var_z = TophatVar(ks, lowring=True, backend='jax',deriv=1)(pks*ks, extrap=True)
+    #     # cosmocnc:  TophatVar(self.k,lowring=True,deriv=1)(self.pk*self.k,extrap=True)
+    #     return var_z
 
 
-    # Apply the function to each column of P
-    dvar = jax.vmap(compute_tophat_dvar, in_axes=(1, None))(P, ks)
+    # # Apply the function to each column of P
+    # dvar = jax.vmap(compute_tophat_dvar, in_axes=(1, None))(P, ks)
+
+    # Create a TophatVar instance for computing the derivative (with deriv=1).
+    # _tophat_d = TophatVar(ks, lowring=True, backend='jax', deriv=1)
+    # def _compute_tophat_dvar_single(pks):
+    #     _, var_z = _tophat_d(pks * ks, extrap=True)
+    #     return var_z
+    # dvar = jax.vmap(_compute_tophat_dvar_single, in_axes=1)(P)
 
 
     # Step 4: Compute gradient of var with respect to R
     # Assuming R is uniform across z_grid, use the first R from TophatVar
-    R, _ = TophatVar(ks, lowring=True, backend='jax')(P[:, 0], extrap=True)
-    R = R.flatten()  # Ensure R has shape (1000,)
+    # R, _ = TophatVar(ks, lowring=True, backend='jax')(P[:, 0], extrap=True)
+    # R = R.flatten()  # Ensure R has shape (1000,)
+    # lnr_grid = jnp.log(R)
+    # lnx_grid = jnp.log(1+z_grid)
+    # -------------------------------------------------------------------------
+    # 3. Compute the scale R from one representative power spectrum (first column).
+    # -------------------------------------------------------------------------
+    R, _ = _tophat_instance(P[:, 0], extrap=True)
+    R = R.flatten()  # Ensure R is 1D.
     lnr_grid = jnp.log(R)
-    lnx_grid = jnp.log(1+z_grid)
-    
+    lnx_grid = jnp.log(1 + z_grid)
     
     
     lnsigma_grid = 0.5*jnp.log(var)
@@ -122,9 +172,16 @@ def get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = None)
     dndlnm_grid = 1./3.*3./(4.*jnp.pi*Rh**3)*dlnnudlnRh*hmf
     return lnx_grid,lnm_grid,dndlnm_grid
 
-def get_hmf_at_z_and_m(z,m,params_values_dict = None):
+# def get_hmf_at_z_and_m(z,m,params_values_dict = None):
+#     lnx, lnm, dndlnm = get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = params_values_dict)
+#     hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
+#     lnxp = jnp.log(1.+z)
+#     lnmp = jnp.log(m)
+#     return jnp.exp(hmf_interp((lnxp,lnmp)))
+def get_hmf_at_z_and_m(z,m,params_values_dict = None, eps = 1e-12):
     lnx, lnm, dndlnm = get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = params_values_dict)
-    hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
+    # hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
+    hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(jnp.clip(dndlnm, a_min=eps)))
     lnxp = jnp.log(1.+z)
     lnmp = jnp.log(m)
     return jnp.exp(hmf_interp((lnxp,lnmp)))

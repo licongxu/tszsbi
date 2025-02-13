@@ -8,6 +8,16 @@ import mcfit
 from mcfit import TophatVar
 from .utils import get_ell_range
 
+# Precompute the x grid (make sure these limits match your needs)
+_X_GRID = jnp.logspace(jnp.log10(1e-6), jnp.log10(1e3), num=200)
+
+# Construct the Hankel transform using the precomputed x grid.
+# (This runs once at import time.)
+_Hankel = mcfit.Hankel(_X_GRID, nu=0.5, lowring=True, backend='jax')
+# Create a jitted version of its __call__ method.
+_Hankel_jit = jax.jit(functools.partial(_Hankel, extrap=False))
+
+
 
 # Import the shared classy_sz from the package
 from . import classy_sz
@@ -27,6 +37,7 @@ def gnfw_pressure_profile(x, z, m, params_values_dict = None):
     # GNFW prefactor
     B = rparams['B']    
     m_delta_tilde = (m / B) # convert to M_sun 
+    # C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * ((h / 0.7) * m_delta_tilde / (3e14))**(2 / 3 + 0.12) # eV cm^-3
     C = 1.65 * (h / 0.7)**2 * (H / H0)**(8 / 3) * (m_delta_tilde / (0.7 * 3e14))**(2 / 3 + 0.12) * (0.7/h)**1.5 # eV cm^-3
     c500 = rparams['c500']
     gamma = rparams['gammaGNFW']
@@ -92,7 +103,7 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
     # rparams = classy_sz.pars
     h = rparams['H0']/100
     B = rparams['B']
-    
+
     # print(rparams)
     me_in_eV = 510998.95 # electron mass in eV/c^2
     # me_in_eV = 511000 # electron mass in eV/c^2
@@ -111,7 +122,7 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
     # print(r_delta_cm/ell_delta**2)
     # print(sigmat_over_mec2)
 
-    prefactor = sigmat_over_mec2 * 4 * np.pi * r_delta_cm/(ell_delta**2)
+    prefactor = sigmat_over_mec2 * 4 * jnp.pi * r_delta_cm/(ell_delta**2)
 
     return prefactor
 
@@ -121,58 +132,85 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
 # H = mcfit.Hankel(x_array, nu=0.5, lowring=True, backend='jax') 
 # H_jit = jax.jit(functools.partial(H, extrap=False))
 
-def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
+# def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict = None):
 
-    rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
-    h = rparams['H0']/100
+#     rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
+#     h = rparams['H0']/100
+#     B = rparams['B']
+    
+#     prefactor = y_ell_prefactor(z, m, params_values_dict=params_values_dict)
+#     # print(prefactor)
+#     # Define x in logarithmic space
+#     x = jnp.logspace(jnp.log10(1e-6), jnp.log10(1e3), num=200)  # Avoid x = 0 to prevent divergence
+#     x = jnp.array(x)
+#     # x = np.array(jax.device_get(x))
+
+#     integrand = hankel_integrand(x, z, m, x_min=1e-6, x_max=4, params_values_dict=params_values_dict)
+#     # print(integrand)
+
+#     # Hankel transform with JAX
+#     H = mcfit.Hankel(x, nu=0.5, lowring=True, backend='jax')
+#     H_jit = jax.jit(functools.partial(H, extrap=False))
+
+#     k, y_k = H_jit(integrand) # Note that k = ell/ell_delta
+#     # print(k)
+#     # print(y_k)
+
+#     dAz = classy_sz.get_angular_distance_at_z(z, params_values_dict = params_values_dict) * h # in Mpc/h
+#     # dAz = classy_sz.get_angular_distance_at_z(z,params_values_dict = params_values_dict)/(1+z)*h # in Mpc/h
+
+#     delta = 500
+#     r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict = params_values_dict)/(B**(1/3))  # in Mpc/h
+#     # print(r_delta)
+#     ell_delta = dAz/r_delta
+#     # print(ell_delta)
+
+#     ell = jnp.zeros(ell_delta.shape)
+#     # ell = k * ell_delta  # Note that k = ell/ell_delta
+#     ell = k[None, :] * ell_delta[:, None]
+#     # print("shape  of ell:", ell.shape)
+
+
+#     # print("shape of k:", k.shape)
+#     # print("shape of ell_delta:", ell_delta.shape)
+
+#     # print(ell)
+#     # print(ell_delta[:, None].shape)
+#     # print(k[None, :])
+#     # print(y_k.shape)
+#     # print(prefactor.shape)
+#     # print(prefactor[:, None])
+
+#     # y_ell = prefactor * y_k * np.sqrt(np.pi/(2*k)) # multiply the prefactor of spherical Bessel to Hankel
+#     y_ell = prefactor[:, None] * y_k * jnp.sqrt(jnp.pi / (2 * k[None, :]))
+
+#     return ell, y_ell
+
+def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict=None):
+    rparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+    h = rparams['H0'] / 100
     B = rparams['B']
     
     prefactor = y_ell_prefactor(z, m, params_values_dict=params_values_dict)
-    # print(prefactor)
-    # Define x in logarithmic space
-    x = jnp.logspace(jnp.log10(1e-6), jnp.log10(6e2), num=128)  # Avoid x = 0 to prevent divergence
-    x = jnp.array(x)
+    
+    # Use the precomputed _X_GRID instead of recreating x
+    integrand = hankel_integrand(_X_GRID, z, m, x_min=x_min, x_max=x_max, params_values_dict=params_values_dict)
 
-    integrand = hankel_integrand(x, z, m, x_min=1e-6, x_max=4, params_values_dict=params_values_dict)
-    # print(integrand)
+    # Use the pre-compiled jitted Hankel transform.
+    k, y_k = _Hankel_jit(integrand)  # k = ell/ell_delta
 
-    # Hankel transform with JAX
-    H = mcfit.Hankel(x, nu=0.5, lowring=True, backend='jax') 
-    H_jit = jax.jit(functools.partial(H, extrap=False))
-
-    k, y_k = H_jit(integrand) # Note that k = ell/ell_delta
-    # print(k)
-    # print(y_k)
-
-    dAz = classy_sz.get_angular_distance_at_z(z, params_values_dict = params_values_dict) * h # in Mpc/h
-    # dAz = classy_sz.get_angular_distance_at_z(z,params_values_dict = params_values_dict)/(1+z)*h # in Mpc/h
-
+    dAz = classy_sz.get_angular_distance_at_z(z, params_values_dict=params_values_dict) * h  # in Mpc/h
     delta = 500
-    r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict = params_values_dict)/(B**(1/3))  # in Mpc/h
-    # print(r_delta)
-    ell_delta = dAz/r_delta
-    # print(ell_delta)
-
-    ell = jnp.zeros(ell_delta.shape)
-    # ell = k * ell_delta  # Note that k = ell/ell_delta
+    r_delta = classy_sz.get_r_delta_of_m_delta_at_z(delta, m, z, params_values_dict=params_values_dict) / (B**(1/3))
+    ell_delta = dAz / r_delta
+    
+    # Compute ell and combine to get y_ell
     ell = k[None, :] * ell_delta[:, None]
-    # print("shape  of ell:", ell.shape)
-
-
-    # print("shape of k:", k.shape)
-    # print("shape of ell_delta:", ell_delta.shape)
-
-    # print(ell)
-    # print(ell_delta[:, None].shape)
-    # print(k[None, :])
-    # print(y_k.shape)
-    # print(prefactor.shape)
-    # print(prefactor[:, None])
-
-    # y_ell = prefactor * y_k * np.sqrt(np.pi/(2*k)) # multiply the prefactor of spherical Bessel to Hankel
     y_ell = prefactor[:, None] * y_k * jnp.sqrt(jnp.pi / (2 * k[None, :]))
 
     return ell, y_ell
+
+
 
 def y_ell_interpolate(z, m, params_values_dict = None):
     """
@@ -192,6 +230,9 @@ def y_ell_interpolate(z, m, params_values_dict = None):
 
     # Compute the complete y_ell values
     ell_nointer_list, y_ell_nointer_list = y_ell_complete(z, m, params_values_dict = params_values_dict)
+    # Freeze these arrays so that JAX won't trace back through y_ell_complete.
+    # ell_nointer_list = jax.lax.stop_gradient(y_ell_complete(z, m, params_values_dict = params_values_dict))[0]
+    # y_ell_nointer_list = jax.lax.stop_gradient(y_ell_complete(z, m, params_values_dict = params_values_dict))[1]
 
     # Define evaluation ell values (uniform grid)
     # ell_eval = jnp.logspace(log10_l_min, log10_l_max, num=num)

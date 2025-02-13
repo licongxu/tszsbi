@@ -2,6 +2,7 @@ from classy_sz import Class as Class_sz
 
 # Define default cosmology parameters
 params = {
+    'output': '',
     'omega_b': 0.02242,
     'omega_cdm': 0.1193,
     'H0': 67.66,
@@ -21,7 +22,7 @@ params = {
     'alphaGNFW': 1.0620,
     'betaGNFW': 5.4807,
     'B': 1.0,
-    'cosmo_model': 1, # use mnu-lcdm emulators
+    # 'cosmo_model': 1, # use mnu-lcdm emulators
     'jax': 1
 }
 
