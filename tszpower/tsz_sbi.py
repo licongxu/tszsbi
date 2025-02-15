@@ -82,7 +82,7 @@ def compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=
     ell = get_ell_range()  # jnp.array of shape (n_ell,)
 
     # Scalar version.
-    def compute_for_params(logA_i, omega_b_i, omega_cdm_i, H0_i, n_s_i, B_i):
+    def compute_for_params(logA_i, omega_b_i, omega_cdm_i, H0_i, n_s_i, B_i, data_path = "data/data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"):
         pars = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
         pars.update({
             'ln10^{10}A_s': logA_i,
@@ -92,7 +92,11 @@ def compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=
             'n_s':          n_s_i,
             'B':            B_i
         })
-        Mllp_theory = compute_tsz_covariance(params_values_dict=pars)[1]
+        # Mllp_theory = compute_tsz_covariance(params_values_dict=pars)[1]
+
+        D = np.loadtxt(data_path)
+        Mllp_theory = jnp.diag(((D[:, 2])/(ell*(ell+1)*1e12/(2*jnp.pi)))**2)
+
         L = jnp.linalg.cholesky(Mllp_theory)
         # Use the provided key (assumed scalar) to generate noise.
         z = jax.random.normal(key, shape=(Mllp_theory.shape[0],))
@@ -130,8 +134,9 @@ def compute_Cl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=
         # For multiple realizations, we assume cosmological parameters are scalar or uniformly batched.
         Nl_yy = jax.vmap(lambda k: compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, k,
                                                   params_values_dict=params_values_dict))(keys)
+        ell = get_ell_range()
         # Cl_noiseless has shape (n_ell,); add a new axis for broadcasting.
-        return Cl_noiseless[None, :] + Nl_yy
+        return Cl_noiseless[None, :] + (Nl_yy)
 
 # --- Function 4: compute_foreground ---
 
@@ -178,12 +183,12 @@ def compute_Cl_yy_total(logA, omega_b, omega_cdm, H0, n_s, B,
     if n_realizations == 1:
         Nl_yy = compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key,
                               params_values_dict=params_values_dict)
-        return (Cl_noiseless + Nl_yy) * (ell * (ell + 1) / (2 * jnp.pi)) + cl_fg
+        return (Cl_noiseless + Nl_yy) * (ell * (ell + 1)*1e12 / (2 * jnp.pi)) + cl_fg
     else:
         keys = jax.random.split(key, n_realizations)
         Nl_yy = jax.vmap(lambda k: compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, k,
                                                   params_values_dict=params_values_dict))(keys)
-        return (Cl_noiseless[None, :] + Nl_yy) * (ell * (ell + 1) / (2 * jnp.pi)) + cl_fg[None, :]
+        return (Cl_noiseless[None, :] + Nl_yy) * (ell * (ell + 1)*1e12 / (2 * jnp.pi))  + cl_fg[None, :]
 
 # --- Example usage ---
 
