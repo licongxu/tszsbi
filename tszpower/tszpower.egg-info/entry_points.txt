@@ -1,0 +1,4 @@
+[console_scripts]
+tszpower-likelihood = tszpower_cobaya_likelihood:main
+tszpower-run = run_tsz_power:main
+tszpower-theory = tszpower_cobaya_theory:main
