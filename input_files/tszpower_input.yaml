@@ -3,9 +3,15 @@ logging_level: 2
 
 theory:
   tszpower_cobaya_theory.tSZ_PS_Theory:
-    foreground_template_directory: "data"
-    foreground_template_file: "data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"
-    # ell_pivot_cib: 300.0
+    # (Optional: if any extra options are needed for the SZ power spectrum part, add them here.)
+    # In this module the foreground template parameters are not used.
+    # You may leave these commented out.
+    # foreground_template_directory: "data"
+    # foreground_template_file: "data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"
+    
+  tszpower_cobaya_theory.tSZ_FG_Theory:
+    foreground_data_directory: "data"
+    foreground_data_file: "data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"
 
 likelihood:
   tszpower_cobaya_likelihood.tSZ_PS_Likelihood:
@@ -27,8 +33,8 @@ params:
 
   ln10_10A_s:
     prior:
-      max: 3.5
       min: 2.5
+      max: 3.5
     proposal: 0.12892144
     ref:
       dist: norm
@@ -37,33 +43,29 @@ params:
     latex: "\\ln(10^{10}A_s)"
 
 
-  # n_s:
-  #   prior:
-  #     min: 0.94
-  #     max: 1.
-  #   ref:
-  #     dist: norm
-  #     loc: 0.965
-  #     scale: 0.0044
-  #   proposal: 0.0044
-  #   latex: n_\mathrm{s}
   n_s:
-    value: 0.965
+    prior:
+      min: 0.94
+      max: 1.
+    ref:
+      dist: norm
+      loc: 0.965
+      scale: 0.0044
+    proposal: 0.0044
     latex: n_\mathrm{s}
 
+  
+
   omega_b:
-    value: 0.0224
-    latex: "\\Omega_b h^2"
-  # omega_b:
-  #   prior:
-  #     min: 0.02
-  #     max: 0.025
-  #   ref:
-  #     dist: norm
-  #     loc: 0.0224
-  #     scale: 0.00015
-  #   proposal: 0.00015
-  #   latex: \Omega_\mathrm{b} h^2
+    prior:
+      min: 0.02
+      max: 0.025
+    ref:
+      dist: norm
+      loc: 0.0224
+      scale: 0.00015
+    proposal: 0.00015
+    latex: \Omega_\mathrm{b} h^2
 
   omega_cdm:
     prior:
@@ -77,14 +79,8 @@ params:
     latex: \Omega_\mathrm{c} h^2
 
 
-
-  # tau_reio:
-  #   prior:
-  #     min: 0.04
-  #     max: 0.12
-  #   latex: "\\tau_{reio}"
   tau_reio:
-    value: 0.054
+    value: 0.055
     latex: "\\tau_{reio}"
 
 
@@ -98,9 +94,6 @@ params:
       scale: 0.2
     proposal: 0.2
     latex: B
-  # B:
-  #   value: 1.0
-  #   latex: B
 
 
   A_cib:
@@ -113,9 +106,7 @@ params:
       scale: 0.16
     proposal: 0.16
     latex: A_\mathrm{CIB}
-  # A_cib:
-  #   value: 0.36
-  #   latex: A_\mathrm{CIB}
+
 
   A_ir:
     prior:
@@ -127,9 +118,7 @@ params:
       scale: 0.18
     proposal: 0.18
     latex: A_\mathrm{IR}
-  # A_ir:
-  #   value: 1.78
-  #   latex: A_\mathrm{IR}
+
 
   A_rs:
     prior:
@@ -145,17 +134,33 @@ params:
   #   value: 0.30
   #   latex: A_\mathrm{RS}
 
-  A_sz:
-    value: 1.0
-    latex: "A_{sz}"
 
 sampler:
   mcmc:
-    Rminus1_stop: 0.1
-    burn_in: 50
-    learn_proposal: True
     covmat: tszpower_chain_full.covmat
-    proposal_scale: 1.9
+    Rminus1_stop: 0.1
+    drag: true
+    proposal_scale: 1.2
+    learn_every: 40
+    learn_proposal: true
+    learn_proposal_Rminus1_max: 100.0
+    learn_proposal_Rminus1_max_early: 100.0
+    max_tries: 100000
+    burn_in: 50
 
+  # evaluate:
+  #   override:
+  #     # #parameter values:
+  #     # Bolliet et al 2018 best-fit (see figure 3)
+  #     B: 1.41
+  #     omega_cdm: 0.125
+  #     omega_b: 0.0224
+  #     # A_s: 1.9e-9
+  #     ln10_10A_s: 3.05321
+  #     n_s: 0.96
+  #     H0: 69.
+  #     A_cib: 0.66
+  #     A_ir: 2.04
+  #     A_rs: 0.0004
 
 timing: true
