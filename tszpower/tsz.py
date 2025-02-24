@@ -79,7 +79,7 @@ def get_integral_grid(params_values_dict = None):
     # print(ell.shape)
     return result
 
-
+@jax.jit
 def compute_integral(params_values_dict = None):
 
     allparams = classy_sz.pars
@@ -151,8 +151,9 @@ def compute_integral(params_values_dict = None):
     # The carry value is not used here (set to None).
     _, C_yy = lax.scan(scan_body, None, jnp.arange(n_ell))
     # C_yy is an array of shape (n_ell,)
+    # print("PASS COMPUTE INTEGRAL")
             
-    return C_yy  
+    return C_yy
 
 def get_integral_grid_trisp(params_values_dict=None):
 

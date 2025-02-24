@@ -2,7 +2,7 @@ from classy_sz import Class as Class_sz
 
 # Define default cosmology parameters
 params = {
-    'output': '',
+    # 'output': '',
     'omega_b': 0.02242,
     'omega_cdm': 0.1193,
     'H0': 67.66,
@@ -17,16 +17,18 @@ params = {
     'z_min': 1e-6,
     'z_max': 6.0,
     'P0GNFW': 8.130,
+    # 'pressure_profile':'GNFW', 
     'c500': 1.156,
     'gammaGNFW': 0.3292,
     'alphaGNFW': 1.0620,
     'betaGNFW': 5.4807,
     'B': 1.0,
-    # 'cosmo_model': 1, # use mnu-lcdm emulators
+    'cosmo_model': 0, # use mnu-lcdm emulators
     'jax': 1
 }
 
 # Initialize classy_sz
 classy_sz = Class_sz()
-classy_sz.set(params)  # Set parameters
+classy_sz.set(params)
+classy_sz.set({'pressure_profile':'GNFW'})  # Set parameters
 classy_sz.compute_class_szfast()  # Required before calling other functions
