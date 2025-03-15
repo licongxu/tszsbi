@@ -42,10 +42,6 @@ dev = [
     "notebook"
 ]
 
-[project.scripts]
-"tszpower-run" = "run_tsz_power:main"
-"tszpower-theory" = "tszpower_cobaya_theory:main"
-"tszpower-likelihood" = "tszpower_cobaya_likelihood:main"
 
 [tool.setuptools]
 include-package-data = true
