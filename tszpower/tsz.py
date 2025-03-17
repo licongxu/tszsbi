@@ -151,9 +151,8 @@ def compute_integral(params_values_dict = None):
     # The carry value is not used here (set to None).
     _, C_yy = lax.scan(scan_body, None, jnp.arange(n_ell))
     # C_yy is an array of shape (n_ell,)
-    # print("PASS COMPUTE INTEGRAL")
             
-    return C_yy
+    return C_yy  
 
 def get_integral_grid_trisp(params_values_dict=None):
 
@@ -251,6 +250,7 @@ def compute_trispectrum(params_values_dict=None):
     return ell, T_ell_ellprime
 
 
+@jax.jit
 def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     """
     Computes the binned tSZ covariance evaluated at the pre-defined ell values.
@@ -287,12 +287,18 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     #         edge_i = 0.5*(ell_{i-1}+ell_i)   for i=1,...,n-1
     #         edge_n = ell_{n-1} + 0.5*(ell_{n-1}-ell_{n-2})
     #     Then Delta_ell[i] = edge_{i+1} - edge_i.
+    ell_min = ell_arr[0]
+    ell_max = ell_arr[-1]
+
+    edges = jnp.sqrt(ell_arr[:-1] * ell_arr[1:])
+    edges = jnp.concatenate((jnp.array([ell_min]), edges, jnp.array([ell_max])))
+
     n_bins = ell_arr.shape[0]
-    edges = jnp.concatenate((
-        jnp.array([ell_arr[0] - 0.5*(ell_arr[1]-ell_arr[0])]),
-        0.5*(ell_arr[1:] + ell_arr[:-1]),
-        jnp.array([ell_arr[-1] + 0.5*(ell_arr[-1]-ell_arr[-2])])
-    ))
+    # edges = jnp.concatenate((
+    #     jnp.array([ell_arr[0] - 0.5*(ell_arr[1]-ell_arr[0])]),
+    #     0.5*(ell_arr[1:] + ell_arr[:-1]),
+    #     jnp.array([ell_arr[-1] + 0.5*(ell_arr[-1]-ell_arr[-2])])
+    # ))
     delta_ell = edges[1:] - edges[:-1]  # shape: (n_bins,)
     
     # 6) Construct the diagonal (Gaussian) term.
