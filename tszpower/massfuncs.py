@@ -37,80 +37,119 @@ def MF_T08(sigmas, z, delta_mean):
     return result
 
 
-def get_hmf_grid(delta=500, delta_def='critical', params_values_dict=None):
-    # Use provided params or default ones.
-    # NOTE: The k-grid is fixed from the module-level _ks.
-    rparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict or _default_params)
-    h = rparams['h']
+def get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = None):
     
-    # Use the fixed k-grid from the module level.
-    ks = _ks
+    rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
+    h = rparams['h']
+    ## initialize (get ks)
+    z = 1.
+    _,ks = classy_sz.get_pkl_at_z(z,params_values_dict = params_values_dict)
 
-    # Define a function for obtaining the power spectrum at a given redshift.
+    # Define a single function for `get_pkl_at_z` calls
     def get_pks_for_z(zp):
-        pks, _ = classy_sz.get_pkl_at_z(zp, params_values_dict=params_values_dict or _default_params)
+        pks, ks = classy_sz.get_pkl_at_z(zp, params_values_dict= params_values_dict)
         return pks.flatten()
 
-    # Get the redshift grid and evaluate power spectra.
+    # Vectorize this function over `z_grid`
     z_grid = classy_sz.z_grid()
-    P = jax.vmap(get_pks_for_z)(z_grid).T  # shape: (n_k, n_z)
+    P = jax.vmap(get_pks_for_z)(z_grid).T
 
-    # Compute the variance using the precomputed _tophat_instance.
-    var = jax.vmap(lambda pks: _tophat_instance(pks, extrap=True)[1], in_axes=1)(P)
+    # Vectorize the TophatVar function over `z_grid`
+    def compute_tophat_var(pks, ks):
+        _, var_z = _tophat_instance(pks, extrap=True)
+        # _, var_z = TophatVar(ks, lowring=True, backend='jax')(pks, extrap=True)
+        return var_z
 
-    # Compute the numerical derivative (of the variance) using the precomputed instance.
-    def compute_numerical_dvar(pks):
+    # Apply the function to each column of P
+    var = jax.vmap(compute_tophat_var, in_axes=(1, None))(P, ks)
+
+
+    # Vectorize the TophatVar function over `z_grid`
+    # def compute_tophat_dvar(pks, ks):
+    #     _, var_z = TophatVar(ks, lowring=True, backend='jax',deriv=1)(pks*ks, extrap=True)
+    #     # _, var_z = TophatVar(ks,lowring=True,deriv=1)(pks*ks,extrap=True)
+    #     return var_z
+    # Option 1: Define a new function to compute the derivative numerically
+    def compute_tophat_dvar(pks):
+        # Use the same k-grid from the call (ks is already available from earlier)
+        # rvar, var_z = TophatVar(ks, lowring=True, backend='jax')(pks, extrap=True)
         rvar, var_z = _tophat_instance(pks, extrap=True)
-        # Compute derivative numerically: d/dR sqrt(var_z) then scale back.
+        # Compute derivative of sqrt(var_z) with respect to R and scale back:
         dvar_z = jnp.gradient(jnp.sqrt(var_z), rvar) * 2. * jnp.sqrt(var_z)
         return dvar_z
 
-    dvar = jax.vmap(compute_numerical_dvar, in_axes=1)(P)
 
-    # Compute the smoothing scale from the first column of P.
+    # # Apply the function to each column of P
+    # dvar = jax.vmap(compute_tophat_dvar, in_axes=(1, None))(P, ks)
+
+    # Then, when applying vmap over P:
+    dvar = jax.vmap(compute_tophat_dvar, in_axes=1)(P)
+
+
+    # Step 4: Compute gradient of var with respect to R
+    # Assuming R is uniform across z_grid, use the first R from TophatVar
+    # R, _ = TophatVar(ks, lowring=True, backend='jax')(P[:, 0], extrap=True)
     R, _ = _tophat_instance(P[:, 0], extrap=True)
-    R = R.flatten()  # Ensure R is 1D.
-    lnx_grid = jnp.log(1 + z_grid)
-    # (lnr_grid is available if needed: lnr_grid = jnp.log(R))
-
-    lnsigma_grid = 0.5 * jnp.log(var)
+    R = R.flatten()  # Ensure R has shape (1000,)
+    lnr_grid = jnp.log(R)
+    lnx_grid = jnp.log(1+z_grid)
+    
+    
+    
+    lnsigma_grid = 0.5*jnp.log(var)
+    
+    # dvar = R*jnp.gradient(var, jnp.log(R))
     dsigma2_grid = dvar
 
-    Rh = R * rparams['h']
-    lnm_grid = jnp.log(4 * jnp.pi * rparams['Omega0_cb'] * rparams['Rho_crit_0'] * Rh**3 / 3.)  # in h-units
-
-    # Choose delta_mean based on the definition.
+    
+    Rh = R*rparams['h']
+    lnm_grid = jnp.log(4*jnp.pi*rparams['Omega0_cb']*rparams['Rho_crit_0']*Rh**3/3.) # in h-units
+    
+    # Define the interpolator
+    # lnsigma_interpolator = jscipy.interpolate.RegularGridInterpolator((lnx_grid, lnm_grid), lnsigma_grid)
+    # dsigma2_interpolator = jscipy.interpolate.RegularGridInterpolator((lnx_grid, lnm_grid), dsigma2_grid)
+    # print(jnp.exp(lnm_grid)[0],jnp.exp(lnm_grid)[-1])
     if delta_def == 'critical':
-        delta_mean = classy_sz.get_delta_mean_from_delta_crit_at_z(delta, z_grid, params_values_dict=params_values_dict or _default_params)
+        delta_mean = classy_sz.get_delta_mean_from_delta_crit_at_z(delta,z_grid,params_values_dict = params_values_dict)
+        # print(params_values_dict)
     elif delta_def == 'mean':
         delta_mean = jnp.full_like(z_grid, delta)
     else:
-        raise ValueError("delta_def must be either 'critical' or 'mean'.")
-
-    delta_c = (3. / 20.) * jnp.power(12. * jnp.pi, 2. / 3.)
+        print("Not implemened yet")
+    # print(delta_mean[0],delta_mean[-1])
+    
+    
+    delta_c =  (3./20.)*jnp.power(12.*jnp.pi,2./3.) # this is = 1.686470199841145
+    # print(delta_c)
+    # note here we dont use matter dependent delta_c
+    # which would be multiplied by (1.+0.012299*log10(pvecback[pba->index_bg_Omega_m]));
+    
+    
     sigmas = jnp.exp(lnsigma_grid)
+    nus = (delta_c/sigmas)**2 ## currently for book keeping
+    # print("nus",nus.shape)
+    # print("sigmas shape",sigmas.shape)
+    # print("z_grid shape",z_grid.shape)
+    # print("delta_mean shape",delta_mean.shape)
+    # print(delta_mean)
+
     hmf = MF_T08(sigmas, z_grid, delta_mean)
+    # print("hmf shape",hmf.shape)
 
-    lnSigma2 = 2. * lnsigma_grid
-    dlnsigmadlnR = dsigma2_grid / 2.
-    dlnSigma2dlnR = 2. * dlnsigmadlnR * R / jnp.exp(lnSigma2)
+    lnSigma2 = 2.*lnsigma_grid
+    dlnsigmadlnR = dsigma2_grid/2.
+    dlnSigma2dlnR = 2.*dlnsigmadlnR*R/jnp.exp(lnSigma2)
     dlnnudlnRh = -dlnSigma2dlnR
+    
+    # Return dn/dlogM in units of h^3 Mpc^-3
+    dndlnm_grid = 1./3.*3./(4.*jnp.pi*Rh**3)*dlnnudlnRh*hmf
+    return lnx_grid,lnm_grid,dndlnm_grid
 
-    # Return dn/dlogM in units of h^3 Mpc^-3.
-    dndlnm_grid = (1. / 3.) * (3. / (4. * jnp.pi * Rh**3)) * dlnnudlnRh * hmf
-    return lnx_grid, lnm_grid, dndlnm_grid
 
-
-# def get_hmf_at_z_and_m(z,m,params_values_dict = None):
-#     lnx, lnm, dndlnm = get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = params_values_dict)
-#     hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
-#     lnxp = jnp.log(1.+z)
-#     lnmp = jnp.log(m)
-#     return jnp.exp(hmf_interp((lnxp,lnmp)))
-def get_hmf_at_z_and_m(z,m,params_values_dict = None, eps = 1e-12):
+def get_hmf_at_z_and_m(z,m,params_values_dict = None):
     lnx, lnm, dndlnm = get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = params_values_dict)
-    # hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
-    hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(jnp.clip(dndlnm, a_min=eps)))
+    hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))
     lnxp = jnp.log(1.+z)
     lnmp = jnp.log(m)
+    # print(hmf_interp((lnxp,lnmp)))
     return jnp.exp(hmf_interp((lnxp,lnmp)))
