@@ -282,16 +282,24 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     # T_ell_ellprime shape: (n_ell, n_ell)
     # ell_arr shape:        (n_ell,)
     edges = jnp.sqrt(ell_arr[:-1] * ell_arr[1:])
-    edges = jnp.concatenate((jnp.array([ell_arr[1]]), edges, jnp.array([ell_arr[-1]])))
+    edges = jnp.concatenate((jnp.array([ell_arr[0]]), edges, jnp.array([ell_arr[-1]])))
 
     # edges = jnp.concatenate((
     #     jnp.array([ell_arr[0] - 0.5*(ell_arr[1]-ell_arr[0])]),
     #     0.5*(ell_arr[1:] + ell_arr[:-1]),
     #     jnp.array([ell_arr[-1] + 0.5*(ell_arr[-1]-ell_arr[-2])])
     # ))
+    # all_ls = jnp.arange(10, 960)
+
+
+    # delta_ell, _ = jnp.histogram(all_ls, bins=edges)
     delta_ell = edges[1:] - edges[:-1]  # shape: (n_bins,)
     # print(delta_ell)
     # print(ell_arr)
+
+    # Manually double the first and last bin widths
+    delta_ell = delta_ell.at[0].set(2 * delta_ell[0])
+    delta_ell = delta_ell.at[-1].set(2 * delta_ell[-1])
 
     # 3) If no noise is given, set it to zero
     if noise_ell is None:
