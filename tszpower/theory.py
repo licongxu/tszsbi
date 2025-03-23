@@ -1,13 +1,13 @@
 # tszpower/theory.py
-import jax
 import numpy as np
 import jax.numpy as jnp
-import tszpower  # assuming tszpower already provides these functions
-import time
+from power_spectra import compute_Dell_yy
+from utils import get_ell_range
+# import time
 
 # You can either mimic the structure of your Cobaya theory classes
 # or simply define functions. Here is one possible approach:
-# @jax.jit
+
 def compute_sz_power(allparams):
     """
     Computes the tSZ power spectrum (1-halo term) for the given cosmological parameters.
@@ -37,7 +37,7 @@ def compute_sz_power(allparams):
         "alphaGNFW": 1.0620,
         "betaGNFW": 5.4807,
         "jax": 1,
-        "cosmo_model": 1,
+        "cosmo_model": 0,
         # "omega_b": 0.0224,
         # "omega_cdm": 0.119,
         # "H0": 69,
@@ -52,25 +52,19 @@ def compute_sz_power(allparams):
         "omega_cdm": allparams["omega_cdm"],
         "H0": allparams["H0"],
         # "tau_reio": allparams["tau_reio"],
-        "ln10_10A_s": allparams["ln10_10A_s"],
+        "ln10^{10}A_s": allparams["ln10_10A_s"],
         "n_s": allparams["n_s"],
         "B": allparams["B"],
     }
-    # print(updated_params)
     updated_params.update(fixed_params)
-    # print(updated_params)
     
     # Retrieve ell array and compute the power spectrum
-    ell = tszpower.get_ell_range()  # This function should already be in your package.
-    # print(updated_params)
-    cl_total = tszpower.compute_integral(params_values_dict=updated_params)
-    # Convert units as in your original code
-
-    cl_total = cl_total * ell * (ell + 1) / (2 * jnp.pi) * 1e12
+    ell = get_ell_range()  # This function should already be in your package.
+    dl_total = compute_Dell_yy(params_value_dict=updated_params)
     
     # For this example we assume only a 1-halo contribution:
-    cl_1h = cl_total
-    return ell, cl_1h
+    dl_1h = dl_total
+    return ell, dl_1h
 
 
 def compute_foreground_lkl(allparams, fg_template_path='data/data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt'):
@@ -105,5 +99,5 @@ def compute_foreground_lkl(allparams, fg_template_path='data/data_fg-ell-cib_rs_
     # Here A_CN is fixed by calibration
     A_cn = 0.9033
     
-    cl_fg = A_cib * A_CIB_MODEL + A_rs * A_RS_MODEL + A_ir * A_IR_MODEL + A_cn * A_CN_MODEL
-    return cl_fg
+    dl_fg = A_cib * A_CIB_MODEL + A_rs * A_RS_MODEL + A_ir * A_IR_MODEL + A_cn * A_CN_MODEL
+    return dl_fg

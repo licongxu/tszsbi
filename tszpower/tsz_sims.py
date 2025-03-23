@@ -1,43 +1,16 @@
-import tszpower
 import jax
 import jax.numpy as jnp
 import jax.random as random
-from jax import grad
 import matplotlib.pyplot as plt
 import numpy as np
-from .utils import get_ell_range
-from .tsz import compute_integral, compute_tsz_covariance
+import torch
+from .utils import get_ell_range, get_batch_size, broadcast_to_batch
+from .power_spectra import compute_Dell_yy
 from . import classy_sz  # shared instance
-
-# --- Helper Functions for Broadcasting ---
-
-def ensure_array(arg):
-    """Ensure that the argument is a JAX array."""
-    if not isinstance(arg, jnp.ndarray):
-        return jnp.array(arg)
-    return arg
-
-def broadcast_to_batch(arg, batch_size):
-    """If arg is scalar (rank 0), broadcast it to shape (batch_size,)."""
-    arg = ensure_array(arg)
-    if arg.ndim == 0:
-        return jnp.broadcast_to(arg, (batch_size,))
-    return arg
-
-def get_batch_size(*args):
-    """
-    Determine the batch size from the first argument that is batched.
-    If none are batched, return None.
-    """
-    for arg in args:
-        arr = ensure_array(arg)
-        if arr.ndim > 0:
-            return arr.shape[0]
-    return None
 
 # --- Function 1: compute_Cl_yy_noiseless ---
 
-def compute_Cl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B, params_values_dict=None):
+def compute_Dl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B, params_values_dict=None):
     """
     Differentiable forward model for C_ell^yy that accepts scalar or batched inputs
     for six cosmological parameters.
@@ -55,8 +28,9 @@ def compute_Cl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B, params_values_
             'n_s':          n_s_i,
             'B':            B_i
         })
-        Cl_theory = compute_integral(params_values_dict=pars)
-        return Cl_theory
+        Dl_theory = compute_Dell_yy(params_values_dict=pars)
+        # Cl_theory = compute_integral(params_values_dict=pars)
+        return Dl_theory
 
     batch_size = get_batch_size(logA, omega_b, omega_cdm, H0, n_s, B)
     if batch_size is None:
@@ -95,11 +69,12 @@ def compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=
         # Mllp_theory = compute_tsz_covariance(params_values_dict=pars)[1]
 
         D = np.loadtxt(data_path)
-        Mllp_theory = jnp.diag(((D[:, 2])/(ell*(ell+1)*1e12/(2*jnp.pi)))**2)
+        # Mllp_theory = jnp.diag(((D[:, 2])/(ell*(ell+1)*1e12/(2*jnp.pi)))**2) # This is just gaussian covariance
+        Mllp_scaled = jnp.diag((D[:, 2])**2)
 
-        L = jnp.linalg.cholesky(Mllp_theory)
+        L = jnp.linalg.cholesky(Mllp_scaled)
         # Use the provided key (assumed scalar) to generate noise.
-        z = jax.random.normal(key, shape=(Mllp_theory.shape[0],))
+        z = jax.random.normal(key, shape=(Mllp_scaled.shape[0],))
         N_l_sim = L @ z
         return N_l_sim
 
@@ -118,17 +93,17 @@ def compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=
 
 # --- Function 3: compute_Cl_yy ---
 
-def compute_Cl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=None, n_realizations=1):
+def compute_Dl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=None, n_realizations=1):
     """
-    Computes the full C_ell^yy (theory plus noise) for given parameters.
+    Computes the full D_ell^yy (theory plus noise) for given parameters.
     If n_realizations > 1, returns an array with an extra leading dimension.
     """
-    Cl_noiseless = compute_Cl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B,
+    Dl_noiseless = compute_Dl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B,
                                             params_values_dict=params_values_dict)
     if n_realizations == 1:
         Nl_yy = compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key,
                               params_values_dict=params_values_dict)
-        return Cl_noiseless + Nl_yy
+        return Dl_noiseless + Nl_yy
     else:
         keys = jax.random.split(key, n_realizations)
         # For multiple realizations, we assume cosmological parameters are scalar or uniformly batched.
@@ -136,11 +111,11 @@ def compute_Cl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key, params_values_dict=
                                                   params_values_dict=params_values_dict))(keys)
         ell = get_ell_range()
         # Cl_noiseless has shape (n_ell,); add a new axis for broadcasting.
-        return Cl_noiseless[None, :] + (Nl_yy)
+        return Dl_noiseless[None, :] + (Nl_yy)
 
 # --- Function 4: compute_foreground ---
 
-def compute_foreground(A_cib, A_rs, A_ir, fg_template_path='data/data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt'):
+def compute_dl_foreground(A_cib, A_rs, A_ir, fg_template_path='data/data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt'):
     """
     Computes the foreground contribution given nuisance parameters.
     If the nuisance parameters are batched, the output is batched.
@@ -169,47 +144,82 @@ def compute_foreground(A_cib, A_rs, A_ir, fg_template_path='data/data_fg-ell-cib
                 A_cn  * A_CN_MODEL[None, :])
 
 # --- Function 5: compute_Cl_yy_total ---
-
-def compute_Cl_yy_total(logA, omega_b, omega_cdm, H0, n_s, B,
+@jax.jit
+def compute_Dl_yy_total(logA, omega_b, omega_cdm, H0, n_s, B,
                         A_cib, A_rs, A_ir, key, params_values_dict=None, n_realizations=1):
     """
     Computes the total C_ell^yy as the sum of the theoretical (noiseless) component,
     the foreground contribution, and one or more noise realizations.
     """
-    Cl_noiseless = compute_Cl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B,
+    Dl_noiseless = compute_Dl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B,
                                             params_values_dict=params_values_dict)
-    cl_fg = compute_foreground(A_cib, A_rs, A_ir)
-    ell = get_ell_range()
-    if n_realizations == 1:
-        Nl_yy = compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key,
+    dl_fg = compute_dl_foreground(A_cib, A_rs, A_ir)
+    # ell = get_ell_range()
+
+    #TODO: Fix this to include the noise realization using jax.lax.con()
+    # if n_realizations == 1:
+    #     Nl_yy = compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key,
+    #                           params_values_dict=params_values_dict)
+    #     return (Cl_noiseless + Nl_yy) * (ell * (ell + 1)*1e12 / (2 * jnp.pi)) + cl_fg
+    # else:
+    #     keys = jax.random.split(key, n_realizations)
+    #     Nl_yy = jax.vmap(lambda k: compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, k,
+    #                                               params_values_dict=params_values_dict))(keys)
+    #     return (Cl_noiseless[None, :] + Nl_yy) * (ell * (ell + 1)*1e12 / (2 * jnp.pi))  + cl_fg[None, :]
+    Nl_yy = compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, key,
                               params_values_dict=params_values_dict)
-        return (Cl_noiseless + Nl_yy) * (ell * (ell + 1)*1e12 / (2 * jnp.pi)) + cl_fg
-    else:
-        keys = jax.random.split(key, n_realizations)
-        Nl_yy = jax.vmap(lambda k: compute_Nl_yy(logA, omega_b, omega_cdm, H0, n_s, B, k,
-                                                  params_values_dict=params_values_dict))(keys)
-        return (Cl_noiseless[None, :] + Nl_yy) * (ell * (ell + 1)*1e12 / (2 * jnp.pi))  + cl_fg[None, :]
+    return Dl_noiseless + Nl_yy + dl_fg
 
-# --- Example usage ---
 
-# Convert lists to jnp.array to ensure batched inputs.
-# logA      = jnp.array([3., 3.2])
-# omega_b   = jnp.array([0.0225, 0.0235])
-# omega_cdm = jnp.array([0.12, 0.13])
-# H0        = jnp.array([69., 71.])
-# n_s       = jnp.array([0.965, 0.967])
-# B         = jnp.array([1.6, 2.0])
-# A_cib     = jnp.array([0.5, 1.5])
-# A_rs      = jnp.array([1.5, 2.5])
-# A_ir      = jnp.array([1.5, 2.5])
-# key       = jax.random.PRNGKey(66)
+def simulator(theta: torch.Tensor, params_value_dict = None) -> torch.Tensor:
+    """
+    Simulator that wraps tszpower.compute_Cl_yy_total.
+    
+    The input `theta` is expected to be a torch.Tensor of shape (batch, 9)
+    with columns ordered as:
+      [logA, omega_b, omega_cdm, H0, n_s, B, A_cib, A_rs, A_ir]
+      
+    This function uses the torch tensor directly by converting each element
+    to a Python float, calls the tszpower simulator, and then returns a torch.Tensor.
+    """
+    batch_size = theta.shape[0]
+    
+    # Generate a base key and split it for each simulation.
+    base_key = jax.random.PRNGKey(42)
+    keys = jax.random.split(base_key, batch_size)
+    # print(keys)
+    
+    sim_list = []
+    for i in range(batch_size):
+        # Extract each parameter as a Python float
+        logA      = float(theta[i, 0])
+        omega_b   = float(theta[i, 1])
+        omega_cdm = float(theta[i, 2])
+        H0        = float(theta[i, 3])
+        n_s       = float(theta[i, 4])
+        B         = float(theta[i, 5])
+        A_cib     = float(theta[i, 6])
+        A_rs      = float(theta[i, 7])
+        A_ir      = float(theta[i, 8])
+        
+        # Call your tszpower simulator (which uses JAX internally)
+        sim_i = compute_Dl_yy_total(
+            logA,
+            omega_b,
+            omega_cdm,
+            H0,
+            n_s,
+            B,
+            A_cib,
+            A_rs,
+            A_ir,
+            keys[i],
+            params_values_dict=params_value_dict,  # your global parameter dictionary
+            n_realizations=1
+        )
+        # Convert the returned JAX array to a NumPy array and then to a torch.Tensor
+        sim_torch = torch.tensor(np.array(sim_i), dtype=torch.float32)
+        sim_list.append(sim_torch)
 
-# # Compute components.
-# Cl_noiseless = compute_Cl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B, params_values_dict=allpars)
-# cl_fg = compute_foreground(A_cib, A_rs, A_ir)
-# Cl_total = compute_Cl_yy_total(logA, omega_b, omega_cdm, H0, n_s, B, A_cib, A_rs, A_ir,
-#                                key, params_values_dict=allpars, n_realizations=1)
-
-# print("Cl_noiseless shape:", Cl_noiseless.shape)
-# print("Foreground shape:", cl_fg.shape)
-# print("Cl_total shape:", Cl_total.shape)
+    # Stack the results to form a tensor of shape (batch, n_ell)
+    return torch.stack(sim_list, dim=0)

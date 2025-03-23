@@ -1,5 +1,4 @@
 # tszpower/likelihood.py
-
 import os
 import numpy as np
 import jax.numpy as jnp
@@ -17,7 +16,7 @@ class TSZPowerLikelihood:
         D = np.loadtxt(data_path)
         # Expected columns: ℓ, observed power spectrum, sigma.
         self.ell_data = D[:, 0]
-        self.cl_obs = D[:, 1]
+        self.dl_obs = D[:, 1]
         self.sigma_obs = D[:, 2]
 
         if cov_file is None:
@@ -52,16 +51,16 @@ class TSZPowerLikelihood:
         from .theory import compute_sz_power, compute_foreground_lkl
         
         # Compute the theoretical SZ power spectrum.
-        ell_theory, cl_1h = compute_sz_power(allparams)
+        ell_theory, dl_1h = compute_sz_power(allparams)
         # Compute the foreground contribution.
-        cl_fg = compute_foreground_lkl(allparams, fg_template_path=fg_template_path)
+        dl_fg = compute_foreground_lkl(allparams, fg_template_path=fg_template_path)
         # Sum the contributions. (Adjust which components to sum as needed.)
-        cl_model = cl_1h + cl_fg
+        dl_model = dl_1h + dl_fg
         
         # (Optionally, you may want to check that the theory ell array matches self.ell_data.)
         
         # Compute the residual and chi^2.
-        resid = self.cl_obs - cl_model
+        resid = self.dl_obs - dl_model
         chi2 = jnp.dot(resid, jnp.dot(self.inv_covmat, resid))
         loglike = -0.5 * chi2 - 0.5 * jnp.log(self.det_covmat)
         # loglike = -0.5 * chi2

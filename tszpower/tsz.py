@@ -5,7 +5,7 @@ import numpy as np
 from . import classy_sz  # shared instance
 from .profiles import y_ell_interpolate
 from .massfuncs import get_hmf_at_z_and_m
-from .utils import get_ell_range, simpson
+from .utils import get_ell_range, simpson, get_ell_binwidth
 import time
 from jax import lax
 
@@ -23,15 +23,14 @@ def dVdzdOmega(z, params_values_dict = None):
 
 def get_integral_grid(params_values_dict = None):
     
-    rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
-    allparams = classy_sz.pars
+    allparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
     
 
     z_min = allparams['z_min']
     z_max = allparams['z_max']
     z_grid = jnp.geomspace(z_min, z_max, 100)
     
-    h = rparams['h']
+    h = allparams['h']
     # Define an m_grid:
     M_min = allparams['M_min']
     M_max = allparams['M_max']
@@ -52,15 +51,8 @@ def get_integral_grid(params_values_dict = None):
  
 
     # Vectorize this function over `z_grid`
-    # y_ell_mz_grid = jax.vmap(get_yellm_for_z)(z_grid)
     ell, y_ell_mz_grid = jax.vmap(get_yellm_for_z)(z_grid)
     dndlnm_grid = jax.vmap(get_hmf_for_z)(z_grid)
-    # print(y_ell_mz_grid.shape)
-    # print(dndlnm_grid.shape)
-
-    # print(z_grid)
-    # print(y_ell_mz_grid)
-    # Ensure `dndlnm_grid` has a compatible shape for broadcasting
     dndlnm_grid_expanded = dndlnm_grid[:, :, None]  # Shape becomes (100, 100, 1)
 
     comov_vol = dVdzdOmega(z_grid, params_values_dict=params_values_dict)
@@ -70,27 +62,14 @@ def get_integral_grid(params_values_dict = None):
 
     # Perform element-wise multiplication
     result = y_ell_mz_grid**2 * dndlnm_grid_expanded * comov_vol_expanded  # Shape becomes (100, 100, 18)= (dim_z, dim_m, dim_ell)
-    # result = y_ell_mz_grid
-    # prefactor = y_ell_prefactor(z_grid, m_grid_yl, params_values_dict=cosmo_params)
 
-    # Perform element-wise multiplication
-    # result = y_ell_mz_grid * dndlnm_grid_expanded  # Shape becomes (100, 100, 18)  
-    # print(result.shape) 
-    # print(ell.shape)
     return result
 
 @jax.jit
 def compute_integral(params_values_dict = None):
 
-    allparams = classy_sz.pars
-    # print("PASS")
-    # start_time = time.time()
+    allparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
     integrand = get_integral_grid(params_values_dict = params_values_dict) # shape is (dim_z, dim_m, dim_ell) 
-    # integrand = integrand_grid
-    # ell = get_integral_grid()[0]
-    # print(integrand.shape)
-    # print(ell.shape)
-    # print("THis is passed")
 
     z_min = allparams['z_min']
     z_max = allparams['z_max']
@@ -171,8 +150,7 @@ def compute_integral(params_values_dict = None):
 def get_integral_grid_trisp(params_values_dict=None):
 
     # 1) Get y_\ell(z, m) over grids of z and m
-    rparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
-    allparams = classy_sz.pars
+    allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
     
     z_min = allparams['z_min']
     z_max = allparams['z_max']
@@ -232,7 +210,7 @@ def get_integral_grid_trisp(params_values_dict=None):
 
     return ell, integrand
 
-
+@jax.jit
 def compute_trispectrum(params_values_dict=None):
     # 1) Build integrand
     ell, integrand = get_integral_grid_trisp(params_values_dict)
@@ -281,25 +259,31 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     # ell_max = rparams['ell_max']
     # T_ell_ellprime shape: (n_ell, n_ell)
     # ell_arr shape:        (n_ell,)
-    edges = jnp.sqrt(ell_arr[:-1] * ell_arr[1:])
-    edges = jnp.concatenate((jnp.array([ell_arr[0]]), edges, jnp.array([ell_arr[-1]])))
+    # edges = jnp.sqrt(ell_arr[:-1] * ell_arr[1:])
+    # edges = jnp.concatenate((jnp.array([ell_arr[0]]), edges, jnp.array([ell_arr[-1]])))
+    # edges = jnp.concatenate((jnp.array([ell_arr[0]]), edges, jnp.array([20000])))
+  
 
     # edges = jnp.concatenate((
     #     jnp.array([ell_arr[0] - 0.5*(ell_arr[1]-ell_arr[0])]),
     #     0.5*(ell_arr[1:] + ell_arr[:-1]),
     #     jnp.array([ell_arr[-1] + 0.5*(ell_arr[-1]-ell_arr[-2])])
     # ))
-    # all_ls = jnp.arange(10, 960)
+    # all_ls = jnp.arange(2, 20000)
+    # delta_ell , _ = jnp.histogram(all_ls, bins=edges)
 
 
     # delta_ell, _ = jnp.histogram(all_ls, bins=edges)
-    delta_ell = edges[1:] - edges[:-1]  # shape: (n_bins,)
+    # delta_ell = edges[1:] - edges[:-1]  # shape: (n_bins,)
     # print(delta_ell)
     # print(ell_arr)
 
     # Manually double the first and last bin widths
-    delta_ell = delta_ell.at[0].set(2 * delta_ell[0])
-    delta_ell = delta_ell.at[-1].set(2 * delta_ell[-1])
+    # delta_ell = delta_ell.at[0].set(2 * delta_ell[0])
+    # delta_ell = delta_ell.at[-1].set(2 * delta_ell[-1])
+
+    # Table of delta_ell
+    delta_ell = get_ell_binwidth()
 
     # 3) If no noise is given, set it to zero
     if noise_ell is None:
@@ -313,11 +297,9 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     # 5) Build the full covariance matrix
     #    M = diag_term * δ_{ell,ell'} + T_{ell,ell'}
     #    Then multiply by 1 / [4π f_sky]
-    M = jnp.diag(diag_term) + T_ell_ellprime
+    M = jnp.diag(diag_term)/ (4.0 * jnp.pi * f_sky * delta_ell) + T_ell_ellprime / (4.0 * jnp.pi * f_sky)
 
     M_G = jnp.diag(diag_term)/ (4.0 * jnp.pi * f_sky * delta_ell)
-
-    M = M / (4.0 * jnp.pi * f_sky)
 
     return ell_arr, M, M_G
 

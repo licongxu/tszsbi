@@ -1,55 +1,14 @@
 from .config import classy_sz
-from .warmup import warmup  
-
-warmup()
-
-# Import and re-export functions/classes from submodules:
-from .profiles import (
-    gnfw_pressure_profile,
-    window_function,
-    hankel_integrand,
-    mpc_per_h_to_cm,
-    y_ell_prefactor,
-    y_ell_complete,
-    y_ell_interpolate
-)
-
-from .massfuncs import (
-    MF_T08,
-    get_hmf_grid,
-    get_hmf_at_z_and_m
-)
-
-from .tsz import (
-    dVdzdOmega,
-    simpson,
-    get_ell_range,
-    get_integral_grid,
-    compute_integral,
-    get_integral_grid_trisp,
-    compute_trispectrum,
-    compute_tsz_covariance
-)
-
-from .theory import (
-    compute_sz_power,
-    compute_foreground_lkl
-)
-
-from .tsz_sbi import (
-    ensure_array,
-    get_batch_size,
-    broadcast_to_batch,
-    compute_Cl_yy_noiseless,
-    compute_Nl_yy,
-    compute_Cl_yy,
-    compute_foreground,
-    compute_Cl_yy_total
-)
-
-# tszpower/__init__.py
-
+from .initialise import *
+from .profiles import *
+from .massfuncs import *
+from .tsz import *
+from .theory import *
+from .tsz_sims import *
+from .utils import *
 from .likelihood import TSZPowerLikelihood
+from .power_spectra import *
+from .tsz_sbi_inference import *
 
 
 def likelihood(allparams,

@@ -1,7 +1,8 @@
 import jax.numpy as jnp
+import jax.random as random
 
 def get_ell_range():
-    # Predefined list of ell values
+    # # Predefined list of ell values
     ell_eval = jnp.array([10., 13.5, 18., 23.5, 30.5, 40., 52.5, 68.5, 89.5, 
                          117., 152.5, 198., 257.5, 335.5, 436.5, 567.5, 738., 959.5])
     # ell_eval = jnp.array([2.00000000e+00, 2.44280552e+00, 2.98364940e+00, 3.64423760e+00,
@@ -14,9 +15,17 @@ def get_ell_range():
     #    5.40852815e+02, 6.60599120e+02, 8.06857587e+02, 9.85498082e+02,
     #    1.20369008e+03, 1.47019038e+03, 1.79569458e+03, 2.19326632e+03,
     #    2.67886153e+03, 3.27196886e+03, 3.99639179e+03, 4.88120396e+03,
-    #    5.96191597e+03, 7.28190061e+03])
-    # # print(ell_eval)
+    #    5.96191597e+03, 7.28190061e+03, 8.89413350e+03, 1.08633192e+04,
+    #    1.32684880e+04, 1.62061679e+04, 1.97942581e+04])
+    # ell_eval = jnp.arange(200, 301)  # Creates an array from 10 to 1000 (inclusive)
+    # print(ell_eval)
     return ell_eval
+
+def get_ell_binwidth():
+    delta_ell = jnp.array([3., 4., 5., 6., 8., 11., 14., 18., 24., 31., 40., 51., 68., 88., 114., 148.,
+                           193., 250.])
+    
+    return delta_ell
 
 
 def simpson(y, *, x=None, dx=1.0, axis=-1):
@@ -124,3 +133,39 @@ def tupleset(t, i, value):
     l = list(t)
     l[i] = value
     return tuple(l)
+
+def sample_from_uniform(key, x_min, x_max, n=1):
+    # Generate a uniform random sample using the provided key.
+    sample = random.uniform(key, shape=(n,), minval=x_min, maxval=x_max)
+    # If only one sample is requested, return it as a scalar.
+    if n == 1:
+        sample = sample[0]
+    return sample
+
+# --- Helper Functions for Broadcasting ---
+
+def ensure_array(arg):
+    """Ensure that the argument is a JAX array."""
+    if not isinstance(arg, jnp.ndarray):
+        return jnp.array(arg)
+    return arg
+
+def broadcast_to_batch(arg, batch_size):
+    """If arg is scalar (rank 0), broadcast it to shape (batch_size,)."""
+    arg = ensure_array(arg)
+    if arg.ndim == 0:
+        return jnp.broadcast_to(arg, (batch_size,))
+    return arg
+
+def get_batch_size(*args):
+    """
+    Determine the batch size from the first argument that is batched.
+    If none are batched, return None.
+    """
+    for arg in args:
+        arr = ensure_array(arg)
+        if arr.ndim > 0:
+            return arr.shape[0]
+    return None
+
+
