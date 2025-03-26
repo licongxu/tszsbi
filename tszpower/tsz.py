@@ -25,7 +25,6 @@ def get_integral_grid(params_values_dict = None):
     
     allparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
     
-
     z_min = allparams['z_min']
     z_max = allparams['z_max']
     z_grid = jnp.geomspace(z_min, z_max, 100)
@@ -302,7 +301,6 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     M_G = jnp.diag(diag_term)/ (4.0 * jnp.pi * f_sky * delta_ell)
 
     return ell_arr, M, M_G
-
 
 
 

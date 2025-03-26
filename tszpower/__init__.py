@@ -9,6 +9,7 @@ from .utils import *
 from .likelihood import TSZPowerLikelihood
 from .power_spectra import *
 from .tsz_sbi_inference import *
+# from .tsz_sbi import *
 
 
 def likelihood(allparams,

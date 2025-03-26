@@ -1,8 +1,8 @@
 # tszpower/theory.py
 import numpy as np
 import jax.numpy as jnp
-from power_spectra import compute_Dell_yy
-from utils import get_ell_range
+from .power_spectra import compute_Dell_yy
+from .utils import get_ell_range
 # import time
 
 # You can either mimic the structure of your Cobaya theory classes

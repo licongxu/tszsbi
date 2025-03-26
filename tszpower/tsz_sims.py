@@ -20,6 +20,9 @@ def compute_Dl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B, params_values_
     # Scalar version: all six parameters are passed explicitly.
     def compute_for_params(logA_i, omega_b_i, omega_cdm_i, H0_i, n_s_i, B_i):
         pars = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+
+        # Ensure only numeric parameters are used
+        pars = {k: v for k, v in pars.items() if isinstance(v, (int, float, np.ndarray))}
         pars.update({
             'ln10^{10}A_s': logA_i,
             'omega_b':      omega_b_i,
@@ -28,9 +31,10 @@ def compute_Dl_yy_noiseless(logA, omega_b, omega_cdm, H0, n_s, B, params_values_
             'n_s':          n_s_i,
             'B':            B_i
         })
-        Dl_theory = compute_Dell_yy(params_values_dict=pars)
-        # Cl_theory = compute_integral(params_values_dict=pars)
+        # print(pars)
+        Dl_theory = compute_Dell_yy(params_value_dict=pars)
         return Dl_theory
+
 
     batch_size = get_batch_size(logA, omega_b, omega_cdm, H0, n_s, B)
     if batch_size is None:
@@ -171,23 +175,15 @@ def compute_Dl_yy_total(logA, omega_b, omega_cdm, H0, n_s, B,
     return Dl_noiseless + Nl_yy + dl_fg
 
 
-def simulator(theta: torch.Tensor, params_value_dict = None) -> torch.Tensor:
-    """
-    Simulator that wraps tszpower.compute_Cl_yy_total.
-    
-    The input `theta` is expected to be a torch.Tensor of shape (batch, 9)
-    with columns ordered as:
-      [logA, omega_b, omega_cdm, H0, n_s, B, A_cib, A_rs, A_ir]
-      
-    This function uses the torch tensor directly by converting each element
-    to a Python float, calls the tszpower simulator, and then returns a torch.Tensor.
-    """
+def simulator(theta: torch.Tensor, params_value_dict=None) -> torch.Tensor:
+    # Ensure theta is 2D (batch, 9)
+    if theta.ndim == 1:
+        theta = theta.unsqueeze(0)
     batch_size = theta.shape[0]
     
     # Generate a base key and split it for each simulation.
-    base_key = jax.random.PRNGKey(42)
+    base_key = jax.random.PRNGKey(12083)
     keys = jax.random.split(base_key, batch_size)
-    # print(keys)
     
     sim_list = []
     for i in range(batch_size):

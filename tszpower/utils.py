@@ -168,4 +168,3 @@ def get_batch_size(*args):
             return arr.shape[0]
     return None
 
-
