@@ -18,4 +18,4 @@ def initialise():
     # Warm up key functions with filtered params
     _ = compute_integral(params_values_dict=params_filtered)
     _ = compute_trispectrum(params_values_dict=params_filtered)
-    _ = compute_tsz_covariance(params_values_dict=params_filtered, noise_ell=None, f_sky=1.0)
+    # _ = compute_tsz_covariance(params_values_dict=params_filtered, noise_ell=None, f_sky=1.0)

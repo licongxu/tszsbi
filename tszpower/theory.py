@@ -8,7 +8,7 @@ from .utils import get_ell_range
 # You can either mimic the structure of your Cobaya theory classes
 # or simply define functions. Here is one possible approach:
 
-def compute_sz_power(allparams):
+def compute_sz_power(params_value_dict=None):
     """
     Computes the tSZ power spectrum (1-halo term) for the given cosmological parameters.
     
@@ -26,48 +26,18 @@ def compute_sz_power(allparams):
         tSZ power spectrum (1-halo term).
     """
     # Fixed astrophysical parameters
-    fixed_params = {
-        "M_min": 1e10,
-        "M_max": 3.5e15,
-        "z_min": 0.005,
-        "z_max": 3.0,
-        "P0GNFW": 8.130,
-        "c500": 1.156,
-        "gammaGNFW": 0.3292,
-        "alphaGNFW": 1.0620,
-        "betaGNFW": 5.4807,
-        "jax": 1,
-        "cosmo_model": 0,
-        # "omega_b": 0.0224,
-        # "omega_cdm": 0.119,
-        # "H0": 69,
-        "tau_reio": 0.06,
-        # "ln10_10A_s": 3.044,
-        # "n_s": 0.9645,
-
-    }
     # Build the parameter dictionary expected by tszpower (note the key for A_s)
-    updated_params = {
-        "omega_b": allparams["omega_b"],
-        "omega_cdm": allparams["omega_cdm"],
-        "H0": allparams["H0"],
-        # "tau_reio": allparams["tau_reio"],
-        "ln10^{10}A_s": allparams["ln10_10A_s"],
-        "n_s": allparams["n_s"],
-        "B": allparams["B"],
-    }
-    updated_params.update(fixed_params)
     
     # Retrieve ell array and compute the power spectrum
     ell = get_ell_range()  # This function should already be in your package.
-    dl_total = compute_Dell_yy(params_value_dict=updated_params)
+    dl_total = compute_Dell_yy(params_value_dict=params_value_dict)
     
     # For this example we assume only a 1-halo contribution:
     dl_1h = dl_total
     return ell, dl_1h
 
 
-def compute_foreground_lkl(allparams, fg_template_path='data/data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt'):
+def compute_foreground_lkl(allparams, fg_template_path='/home/lx256/tsz_project/tszpower/data/data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt'):
     """
     Computes the foreground contribution given nuisance parameters.
     

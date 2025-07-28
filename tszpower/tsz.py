@@ -146,6 +146,7 @@ def compute_integral(params_values_dict = None):
             
     return C_yy  
 
+
 def get_integral_grid_trisp(params_values_dict=None):
 
     # 1) Get y_\ell(z, m) over grids of z and m
@@ -254,32 +255,7 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
 
     # 2) Compute the tSZ trispectrum T_{ell,ell'}^{yy} and grab the ell array
     ell_arr, T_ell_ellprime = compute_trispectrum(params_values_dict=params_values_dict)
-    # ell_min = rparams['ell_min']
-    # ell_max = rparams['ell_max']
-    # T_ell_ellprime shape: (n_ell, n_ell)
-    # ell_arr shape:        (n_ell,)
-    # edges = jnp.sqrt(ell_arr[:-1] * ell_arr[1:])
-    # edges = jnp.concatenate((jnp.array([ell_arr[0]]), edges, jnp.array([ell_arr[-1]])))
-    # edges = jnp.concatenate((jnp.array([ell_arr[0]]), edges, jnp.array([20000])))
-  
 
-    # edges = jnp.concatenate((
-    #     jnp.array([ell_arr[0] - 0.5*(ell_arr[1]-ell_arr[0])]),
-    #     0.5*(ell_arr[1:] + ell_arr[:-1]),
-    #     jnp.array([ell_arr[-1] + 0.5*(ell_arr[-1]-ell_arr[-2])])
-    # ))
-    # all_ls = jnp.arange(2, 20000)
-    # delta_ell , _ = jnp.histogram(all_ls, bins=edges)
-
-
-    # delta_ell, _ = jnp.histogram(all_ls, bins=edges)
-    # delta_ell = edges[1:] - edges[:-1]  # shape: (n_bins,)
-    # print(delta_ell)
-    # print(ell_arr)
-
-    # Manually double the first and last bin widths
-    # delta_ell = delta_ell.at[0].set(2 * delta_ell[0])
-    # delta_ell = delta_ell.at[-1].set(2 * delta_ell[-1])
 
     # Table of delta_ell
     delta_ell = get_ell_binwidth()

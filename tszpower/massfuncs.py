@@ -146,6 +146,7 @@ def get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = None)
     return lnx_grid,lnm_grid,dndlnm_grid
 
 
+@jax.jit
 def get_hmf_at_z_and_m(z,m,params_values_dict = None):
     lnx, lnm, dndlnm = get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = params_values_dict)
     hmf_interp = jscipy.interpolate.RegularGridInterpolator((lnx, lnm), jnp.log(dndlnm))

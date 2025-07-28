@@ -152,7 +152,7 @@ def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict=None):
     return ell, y_ell
 
 
-
+# @jax.jit
 def y_ell_interpolate(z, m, params_values_dict = None):
     """
     Interpolate y_ell values onto a uniform ell grid for multiple m values.
@@ -193,3 +193,33 @@ def y_ell_interpolate(z, m, params_values_dict = None):
     # print(ell_eval)
 
     return ell_eval, y_ell_eval_list
+
+
+@jax.jit
+def vectorized_y_ell_interpolate(z_array, m_array, params_values_dict):
+    """
+    Computes the y_ell profile for a one-to-one pair of (z, m) values.
+    Each (z, m) pair is processed by converting the scalar m into a one-element 1D array.
+    
+    Parameters:
+      z_array: 1D JAX array of redshifts.
+      m_array: 1D JAX array of masses.
+      params_values_dict: Dictionary containing the cosmological parameters.
+    
+    Returns:
+      ell_eval: The evaluation grid for ℓ (assumed identical for all entries).
+      y_ell_profiles: An array (shape [n, len(ell)]) of y_ell profiles.
+    """
+    if z_array.shape != m_array.shape:
+        raise ValueError("z_array and m_array must have the same shape for 1-to-1 correspondence.")
+
+    def compute_y_ell_single(z, m):
+        m_wrapped = jnp.atleast_1d(m)
+        ell_eval, y_ell_eval = y_ell_interpolate(z, m_wrapped, params_values_dict=params_values_dict)
+        y_ell_eval = jnp.squeeze(y_ell_eval, axis=0)
+        return ell_eval, y_ell_eval
+
+    vectorized_fn = jax.vmap(compute_y_ell_single, in_axes=(0, 0))
+    ell_array, y_ell_profiles = vectorized_fn(z_array, m_array)
+    ell_eval = ell_array[0]
+    return ell_eval, y_ell_profiles

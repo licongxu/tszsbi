@@ -49,8 +49,8 @@ class tSZ_PS_Theory(Theory):
         self.log.info("tSZ_PS_Theory initialized (tSZ power spectrum part).")
         # Fixed astrophysical parameters.
         self.fixed_params = {
-            "M_min": 1e10,
-            "M_max": 3.5e15,
+            "M_min": 1e14*0.55,
+            "M_max": 1e16*0.9,
             "z_min": 5e-3,
             "z_max": 3.0,
             "P0GNFW": 8.130,
@@ -153,7 +153,8 @@ class tSZ_FG_Theory(Theory):
         A_ir = params_values["A_ir"]
         # A_CN is fixed (from external calibration)
         A_cn = 0.9033
-        Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL + A_cn * self.A_CN_MODEL
+        # Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL + A_cn * self.A_CN_MODEL
+        Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL
         state["Cl_sz_foreground"] = Cl_fg
         self._current_state = state
         self.log.info("SZ foreground computed.")

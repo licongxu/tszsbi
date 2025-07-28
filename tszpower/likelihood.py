@@ -4,7 +4,8 @@ import numpy as np
 import jax.numpy as jnp
 import jax
 from functools import partial
-
+from .theory import compute_sz_power, compute_foreground_lkl
+from .power_spectra import compute_Dell_yy
 class TSZPowerLikelihood:
     def __init__(self, data_directory="data",
                  data_file="data_ps-ell-y2-erry2_total-planck-collab-15.txt",
@@ -65,3 +66,25 @@ class TSZPowerLikelihood:
         loglike = -0.5 * chi2 - 0.5 * jnp.log(self.det_covmat)
         # loglike = -0.5 * chi2
         return loglike
+
+@jax.jit    
+def compute_tsz_likelihood(cosmo_param_dict=None, fg_param_dict=None, data_path="/home/lx256/tsz_project/tszpower/data/data_ps-ell-y2-erry2_total-planck-collab-15.txt", cov_path=None):
+    D = np.loadtxt(data_path)
+    # Expected columns: ℓ, observed power spectrum, sigma.
+    ell_data = D[:, 0]
+    dl_obs = D[:, 1]
+    sigma_obs = D[:, 2]
+
+    dl_signal = compute_Dell_yy(params_value_dict=cosmo_param_dict)
+    dl_fg = compute_foreground_lkl(fg_param_dict)
+
+    dl_model = dl_signal + dl_fg
+
+    resid = dl_obs - dl_model
+    covmat =jnp.diag(sigma_obs**2)
+    inv_covmat = jnp.linalg.inv(covmat)
+    chi2 = jnp.dot(resid, jnp.dot(inv_covmat, resid))
+
+    loglike = -0.5 * chi2 - 0.5 
+        # loglike = -0.5 * chi2
+    return loglike
