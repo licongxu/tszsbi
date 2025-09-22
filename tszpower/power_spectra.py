@@ -24,7 +24,7 @@ def compute_Dell_yy(params_value_dict = None):
 
 def compute_Dell_yy_with_error(params_value_dict = None):
 
-    ell, M, M_G = compute_tsz_covariance(params_values_dict=params_value_dict, noise_ell=None, f_sky=1.0)
+    ell, M, M_G = compute_tsz_covariance(params_values_dict=params_value_dict, noise_ell=None, f_sky=1.)
 
     C_ell_yy = compute_integral(params_values_dict=params_value_dict)
     D_ell_yy = ell*(ell+1)*C_ell_yy/(2*jnp.pi)*1e12
@@ -153,36 +153,46 @@ def compute_dlnCl_dlnM(params_values_dict=None, ell=None):
 
 
 @partial(jax.jit, static_argnames=('N_z', 'N_m'))
-def compute_N_clusters(N_z=512, N_m=512, params_values_dict=None):
+def compute_N_clusters(
+    N_z=512, N_m=512, params_values_dict=None,
+    z_range=None, m_range=None,
+):
     """
-    Compute the number of clusters for a given ell.
-    Returns m_grid, N_clusters (both 1D arrays, length n_m)
+    Return the number of clusters integrated over the given z/m ranges.
+    If z_range/m_range are None, defaults to params_values_dict bounds.
     """
-    # Get parameter grids
+    # Defaults from params dict
     allparams = params_values_dict
-    z_min = allparams.get('z_min')
-    z_max = allparams.get('z_max')
-    M_min = allparams.get('M_min')
-    M_max = allparams.get('M_max')
-    n_z = N_z
-    n_m = N_m
-    z_grid = jnp.geomspace(z_min, z_max, n_z)
-    m_grid = jnp.geomspace(M_min, M_max, n_m)
+    z_min = allparams.get('z_min'); z_max = allparams.get('z_max')
+    M_min = allparams.get('M_min'); M_max = allparams.get('M_max')
+
+    # Optional overrides
+    if z_range is not None:
+        z_min, z_max = z_range
+    if m_range is not None:
+        M_min, M_max = m_range
+
+    # Fixed-size grids (no retrace as long as N_z, N_m unchanged)
+    z_grid  = jnp.geomspace(allparams['z_min'], allparams['z_max'], N_z)
+    m_grid  = jnp.geomspace(allparams['M_min'], allparams['M_max'], N_m)
     logm_grid = jnp.log(m_grid)
-    
-    # Get dndlnm for all z, m
+
+    # HMF over the full grids
     def get_hmf_for_z(zp):
         return get_hmf_at_z_and_m(z=zp, m=m_grid, params_values_dict=params_values_dict)
-    dndlnm_grid = jax.vmap(get_hmf_for_z)(z_grid)
-    comov_vol = dVdzdOmega(z_grid, params_values_dict=params_values_dict)
+    dndlnm_grid = jax.vmap(get_hmf_for_z)(z_grid)              # (N_z, N_m)
+    dV_dz = dVdzdOmega(z_grid, params_values_dict=params_values_dict)  # (N_z,)
 
-    comov_vol_expanded = comov_vol[:, None]  
+    # Masks to restrict the ranges (1 inside, 0 outside)
+    z_mask = (z_grid >= z_min) & (z_grid <= z_max)             # (N_z,)
+    m_mask = (m_grid >= M_min) & (m_grid <= M_max)             # (N_m,)
+    mask_2d = z_mask[:, None] & m_mask[None, :]
 
-    integrand = dndlnm_grid * comov_vol_expanded 
+    # Apply masks by multiplication (keeps shapes static)
+    integrand = dndlnm_grid * dV_dz[:, None] * mask_2d
 
-    # First integrate over m (using your Simpson routine along axis=1)
-    partial_m = simpson(integrand, x=logm_grid, axis=1)  # shape (n_z,)
-     # Then integrate the result over z (along axis=0)
-    result = simpson(partial_m, x=z_grid, axis=0)  # scalar
+    # Integrate: first over ln M, then over z
+    partial_m = simpson(integrand, x=logm_grid, axis=1)        # (N_z,)
+    result = simpson(partial_m, x=z_grid, axis=0)              # scalar
 
-    return result*4*jnp.pi 
+    return result * 4.0 * jnp.pi

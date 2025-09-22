@@ -73,7 +73,6 @@ def compute_integral(params_values_dict = None):
     z_min = allparams['z_min']
     z_max = allparams['z_max']
     z_grid = jnp.geomspace(z_min, z_max, 100)
-    
 
     # Define an m_grid:
     M_min = allparams['M_min']

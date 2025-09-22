@@ -9,7 +9,7 @@ from mcfit import TophatVar
 from .utils import get_ell_range
 
 # Precompute the x grid (make sure these limits match your needs)
-_X_GRID = jnp.logspace(jnp.log10(1e-6), jnp.log10(1e5), num=1024)
+_X_GRID = jnp.logspace(jnp.log10(1e-6), jnp.log10(1e6), num=2048*2)
 
 # Construct the Hankel transform using the precomputed x grid.
 # (This runs once at import time.)
@@ -61,7 +61,7 @@ def window_function(x, x_min, x_max):
 
     return jnp.where((x >= x_min) & (x <= x_max), 1.0, 0.0)
 
-def hankel_integrand(x, z, m, x_min=1e-6, x_max=4, params_values_dict = None):
+def hankel_integrand(x, z, m, x_min=1e-6, x_max=20, params_values_dict = None):
     """
     Compute x^0.5 * Pe(x) * W(x).
     Handles x and m as arrays using vmap for vectorization.
@@ -127,7 +127,7 @@ def y_ell_prefactor(z, m, delta = 500, params_values_dict = None):
     return prefactor
 
 
-def y_ell_complete(z, m, x_min=1e-6, x_max=4, params_values_dict=None):
+def y_ell_complete(z, m, x_min=1e-6, x_max=20, params_values_dict=None):
     rparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
     h = rparams['H0'] / 100
     B = rparams['B']

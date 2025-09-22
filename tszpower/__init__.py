@@ -10,4 +10,6 @@ from .likelihood import *
 from .power_spectra import *
 from .tsz_sbi_inference import *
 from .sbi_utils import *
+from .sbi_builder import *
+from .maskedpower import *
 # from .tsz_sbi import *

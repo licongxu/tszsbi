@@ -34,6 +34,7 @@ def MF_T08(sigmas, z, delta_mean):
     
     # Calculate final result
     result = 0.5 * Ap[:, None] * (jnp.power(sigmas / b[:, None], -a[:, None]) + 1) * jnp.exp(-c[:, None] / sigmas**2)
+    # result = 1.0 * Ap[:, None] * (jnp.power(sigmas / b[:, None], -a[:, None]) + 1) * jnp.exp(-c[:, None] / sigmas**2)
     return result
 
 
@@ -103,7 +104,9 @@ def get_hmf_grid(delta = 500, delta_def = 'critical', params_values_dict = None)
 
     
     Rh = R*rparams['h']
+    #print(rparams)
     lnm_grid = jnp.log(4*jnp.pi*rparams['Omega0_cb']*rparams['Rho_crit_0']*Rh**3/3.) # in h-units
+    #lnm_grid = jnp.log(4*jnp.pi*(rparams['Omega0_m'])*rparams['Rho_crit_0']*Rh**3/3.) # in h-units
     
     # Define the interpolator
     # lnsigma_interpolator = jscipy.interpolate.RegularGridInterpolator((lnx_grid, lnm_grid), lnsigma_grid)

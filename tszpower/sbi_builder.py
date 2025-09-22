@@ -62,7 +62,7 @@ def set_seed(seed: Optional[int]) -> None:
 
 def setup_scheduler(optimizer: torch.optim.Optimizer,
                     step_size: int = 30,
-                    gamma: float = 0.9):
+                    gamma: float = 1.0):
     """StepLR, same defaults as your NPE script (NLE overrides step_size to 50)."""
     scheduler = torch.optim.lr_scheduler.StepLR(
         optimizer,
@@ -191,6 +191,10 @@ class NPEConfig:
     dropout_probability: float = 0.0
     activation: Callable[..., nn.Module] = nn.ReLU
     grad_clip: float = 5.0
+    # in NPEConfig and NLEConfig
+    stop_after_epoch: Optional[int] = None   # patience; e.g. 50
+    early_stop_delta: float = 0.0            # min improvement to reset patience
+
     seed: Optional[int] = None
 
 
@@ -258,6 +262,12 @@ class NPETrainer:
         sch = scheduler_fn(opt)["scheduler"]
 
         run: Dict[str, Any] = {"train_losses": [], "val_losses": []}
+        patience = self.config.stop_after_epoch
+        delta = getattr(self.config, "early_stop_delta", 0.0)
+        best_val = float("inf")
+        no_improve = 0
+        best_state = None  # optional: keep best weights so you can restore/save them
+
 
         print(f"[NPE] Starting training for {max_epochs} epochs on {device}...")
         try:
@@ -291,6 +301,24 @@ class NPETrainer:
                         n_val += theta.shape[0]
                     val_loss_avg = val_loss_total / len(val)
                     run["val_losses"].append(val_loss_avg)
+                    # after: run["val_losses"].append(val_loss_avg)
+
+                    if val_loss_avg < (best_val - delta):
+                        best_val = val_loss_avg
+                        no_improve = 0
+                        best_state = net.state_dict()  # optional: keep best model
+                    else:
+                        no_improve += 1
+                        if patience is not None and no_improve >= patience:
+                            print(f"[{self.__class__.__name__}] Early stop at epoch {epoch+1} "
+                                f"(no improvement for {patience} epochs).")
+                            run["early_stopped_epoch"] = epoch + 1
+                            run["best_val_loss"] = best_val
+                            # Optionally restore best weights so subsequent save() is the best model:
+                            if best_state is not None:
+                                net.load_state_dict(best_state)
+                            break
+
 
                 if (epoch % verbose_every == 0) or (epoch == max_epochs - 1):
                     print(
@@ -302,6 +330,7 @@ class NPETrainer:
             run["density_estimator_state"] = net.state_dict()
             run["config"] = asdict(self.config)
             run["input_dims"] = self.input_dims
+
             return run
 
         except KeyboardInterrupt:
@@ -370,6 +399,10 @@ class NLEConfig:
     dropout_probability: float = 0.0
     activation: Callable[..., nn.Module] = nn.ReLU
     grad_clip: float = 5.0
+    # in NPEConfig and NLEConfig
+    stop_after_epoch: Optional[int] = None   # patience; e.g. 50
+    early_stop_delta: float = 0.0            # min improvement to reset patience
+
     # MCMC defaults
     mcmc_method: str = "slice_np_vectorized"
     num_chains: int = 20
@@ -420,7 +453,7 @@ class NLETrainer:
         batch_size: int = 64,
         max_epochs: int = 100,
         initial_lr: float = 1e-3,
-        scheduler_fn: Callable[..., Dict[str, Any]] = lambda opt: setup_scheduler(opt, step_size=50, gamma=0.9),
+        scheduler_fn: Callable[..., Dict[str, Any]] = lambda opt: setup_scheduler(opt, step_size=50, gamma=1.0),
         device: Optional[str] = None,
         verbose_every: int = 10,
     ) -> Dict[str, Any]:
@@ -448,6 +481,12 @@ class NLETrainer:
             "val_log_probs": [],
             "simulation_count": [],
         }
+        patience = self.config.stop_after_epoch
+        delta = getattr(self.config, "early_stop_delta", 0.0)
+        best_val = float("inf")
+        no_improve = 0
+        best_state = None  # optional: keep best weights so you can restore/save them
+
 
         print(f"[NLE] Starting training for {max_epochs} epochs on {device}...")
         print(f"[NLE] Training on {len(train)} samples, validating on {len(val)} samples")
@@ -485,6 +524,24 @@ class NLETrainer:
                     val_loss_avg = val_loss_total / len(val)
                     run["val_losses"].append(val_loss_avg)
 
+                    # after: run["val_losses"].append(val_loss_avg)
+                    if val_loss_avg < (best_val - delta):
+                        best_val = val_loss_avg
+                        no_improve = 0
+                        best_state = net.state_dict()  # optional: keep best model
+                    else:
+                        no_improve += 1
+                        if patience is not None and no_improve >= patience:
+                            print(f"[{self.__class__.__name__}] Early stop at epoch {epoch+1} "
+                                f"(no improvement for {patience} epochs).")
+                            run["early_stopped_epoch"] = epoch + 1
+                            run["best_val_loss"] = best_val
+                            # Optionally restore best weights so subsequent save() is the best model:
+                            if best_state is not None:
+                                net.load_state_dict(best_state)
+                            break
+
+
                 if (epoch % verbose_every == 0) or (epoch == max_epochs - 1):
                     print(
                         f"[NLE] Epoch {epoch+1:3d}/{max_epochs} | "
@@ -495,6 +552,7 @@ class NLETrainer:
             run["density_estimator_state"] = net.state_dict()
             run["config"] = asdict(self.config)
             run["input_dims"] = self.input_dims
+
             return run
 
         except KeyboardInterrupt:

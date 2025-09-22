@@ -49,8 +49,8 @@ class tSZ_PS_Theory(Theory):
         self.log.info("tSZ_PS_Theory initialized (tSZ power spectrum part).")
         # Fixed astrophysical parameters.
         self.fixed_params = {
-            "M_min": 1e14*0.55,
-            "M_max": 1e16*0.9,
+            "M_min": 1e14*0.6766,
+            "M_max": 1e16*0.6766,
             "z_min": 5e-3,
             "z_max": 3.0,
             "P0GNFW": 8.130,
