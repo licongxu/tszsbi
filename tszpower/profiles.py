@@ -9,7 +9,7 @@ from mcfit import TophatVar
 from .utils import get_ell_range
 
 # Precompute the x grid (make sure these limits match your needs)
-_X_GRID = jnp.logspace(jnp.log10(1e-6), jnp.log10(1e6), num=2048*2)
+_X_GRID = jnp.logspace(jnp.log10(1e-6), jnp.log10(1e6), num=1024)
 
 # Construct the Hankel transform using the precomputed x grid.
 # (This runs once at import time.)

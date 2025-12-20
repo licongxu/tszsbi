@@ -5,58 +5,65 @@ tSZ Power Spectrum Likelihood Module
 This module implements a Gaussian likelihood for the tSZ power spectrum.
 It reads the data from a text file and compares the theory prediction
 (with multipole ℓ and power spectrum Cl) to the data.
+
+This version uses a fixed covariance matrix loaded from file (no diagonal/other options).
 """
 
 import os
 import numpy as np
 from cobaya.likelihood import Likelihood
 
+
 class tSZ_PS_Likelihood(Likelihood):
     # Variables set via the YAML file.
-    data_directory: str = "data"  
-    data_file: str = "data_ps-ell-y2-erry2_total-planck-collab-15.txt"
-    # rc_file: str = "data_rc-ell-rc-errrc.txt"
-    use_covariance: bool = False  
-    cov_file: str = "trispectrum_matrix.txt" 
+    data_directory: str = "benchmark"
+    data_file: str = "data_ell_yell_yerr_benchmark.txt"
+    use_covariance: bool = False
+    cov_file: str = "trispectrum_matrix_benchmark.txt"
 
     def initialize(self):
         # Load the data file.
         data_path = os.path.join(self.data_directory, self.data_file)
         D = np.loadtxt(data_path)
         # Expected format: Column 0: ℓ; Column 1: observed power spectrum; Column 2: error (sigma).
-        # self.ell_data = D[:, 0][:-1]
-        # self.cl_obs = D[:, 1][:-1]
-        # self.sigma_obs = D[:, 2][:-1]
         self.ell_data = D[:, 0]
         self.cl_obs = D[:, 1]
-        self.sigma_obs = D[:, 2]
+        # self.sigma_obs = D[:, 2]  # kept for backward compatibility / logging, not used for cov building
 
-        self.cl_obs_testrc = D[:, 1]
-        self.sigma_obs_testrc = D[:, 2]
-
-        # RC_path = os.path.join(self.data_directory, self.rc_file)
-        # R = np.loadtxt(RC_path)
-        # # Expected format: Column 0: ℓ; Column 1: resolved sources power spectrum; Column 2: error (sigma).
-        # self.ell_rc = R[:, 0]
-        # self.cl_rc = R[:, 1]
-        # self.sigma_rc = R[:, 2]
-
-        # Build a diagonal covariance matrix if no external covariance is provided.
+        # --- Fixed covariance: must be loaded from file ---
         if self.cov_file is None:
-            self.covmat = np.diag(self.sigma_obs**2)
-            print("Gaussian covariance matrix is used.")
-        else:
-            f_sky = 0.47
-            trisp_path = os.path.join(self.data_directory, self.cov_file)
-            T = np.loadtxt(trisp_path)
-            self.covmat = np.diag(self.sigma_obs)**2 + T/(4.*np.pi*f_sky)
-            print("Trispectrum is used.")
+            raise ValueError(
+                "tSZ_PS_Likelihood: cov_file must be provided (fixed covariance mode)."
+            )
+
+        cov_path = os.path.join(self.data_directory, self.cov_file)
+        C = np.loadtxt(cov_path)
+
+        # Basic sanity checks and reshaping
+        n = len(self.ell_data)
+        C = np.atleast_2d(C)
+
+        if C.shape != (n, n):
+            raise ValueError(
+                "tSZ_PS_Likelihood: loaded covariance has shape {} but expected ({}, {}). "
+                "Make sure cov_file is an NxN matrix matching the number of data points.".format(
+                    C.shape, n, n
+                )
+            )
+
+        self.covmat = C
 
         # Pre-compute inverse and determinant.
+        # Use slogdet for numerical stability.
         self.inv_covmat = np.linalg.inv(self.covmat)
-        self.det_covmat = np.linalg.det(self.covmat)
+        sign, logdet = np.linalg.slogdet(self.covmat)
+        if sign <= 0:
+            raise ValueError(
+                "tSZ_PS_Likelihood: covariance matrix is not positive definite (slogdet sign <= 0)."
+            )
+        self.logdet_covmat = logdet
 
-        self.log.info("tSZ_PS_Likelihood: Data loaded and covariance matrix constructed.")
+        self.log.info("tSZ_PS_Likelihood: Data loaded and fixed covariance matrix loaded.")
         super().initialize()
 
     def get_requirements(self):
@@ -75,14 +82,19 @@ class tSZ_PS_Likelihood(Likelihood):
         theory_dict = self.provider.get_Cl_sz()
         # Retrieve the foreground contribution.
         foreground = self.provider.get_Cl_sz_foreground()
+
         # Sum the SZ and foreground components.
         # cl_theory = theory_dict["1h"] + theory_dict["2h"] + foreground
         cl_theory = theory_dict["1h"] + foreground
-        # Optionally, one could check that the ℓ array of the theory matches self.ell_data.
+
         resid = self.cl_obs - cl_theory
         chi2 = np.dot(resid, np.dot(self.inv_covmat, resid))
-        # loglike = -0.5 * chi2 - 0.5 * np.log(self.det_covmat)
-        loglike = -0.5 * chi2
-        self.log.info("tSZ_PS_Likelihood: chi2 = {:.2f}, loglike = {:.2f}".format(chi2, loglike))
-        return loglike
 
+        # If you want the normalized Gaussian likelihood, uncomment the next line
+        # loglike = -0.5 * chi2 - 0.5 * self.logdet_covmat
+        loglike = -0.5 * chi2
+
+        self.log.info(
+            "tSZ_PS_Likelihood: chi2 = {:.2f}, loglike = {:.2f}".format(chi2, loglike)
+        )
+        return loglike

@@ -64,6 +64,39 @@ def get_integral_grid(params_values_dict = None):
 
     return result
 
+def get_integrand_number_counts(params_values_dict = None):
+    
+    allparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
+    
+    z_min = allparams['z_min']
+    z_max = allparams['z_max']
+    z_grid = jnp.geomspace(z_min, z_max, 100)
+    
+    h = allparams['h']
+    # Define an m_grid:
+    M_min = allparams['M_min']
+    M_max = allparams['M_max']
+    m_grid_yl = jnp.geomspace(M_min,M_max,100)
+    # m_grid_dndlnm = jnp.geomspace(M_min,M_max,100) * h
+    
+    def get_hmf_for_z(zp):
+        # dndlnm = get_hmf_at_z_and_m(z = zp, m=m_grid_dndlnm, params_values_dict=cosmo_params)
+        dndlnm = get_hmf_at_z_and_m(z = zp, m=m_grid_yl, params_values_dict= params_values_dict)
+        return dndlnm
+ 
+    dndlnm_grid = jax.vmap(get_hmf_for_z)(z_grid)
+    dndlnm_grid_expanded = dndlnm_grid[:, :, None]  # Shape becomes (100, 100, 1)
+
+    comov_vol = dVdzdOmega(z_grid, params_values_dict=params_values_dict)
+
+    # Expand comov_vol to align with the shape of `result`
+    comov_vol_expanded = comov_vol[:, None, None]  # Shape becomes (100, 1, 1)
+
+    # Perform element-wise multiplication
+    result = 4 * jnp.pi * dndlnm_grid_expanded * comov_vol_expanded  # Shape becomes (100, 100, 18)= (dim_z, dim_m, dim_ell)
+
+    return result
+
 @jax.jit
 def compute_integral(params_values_dict = None):
 
@@ -276,6 +309,5 @@ def compute_tsz_covariance(params_values_dict=None, noise_ell=None, f_sky=1.0):
     M_G = jnp.diag(diag_term)/ (4.0 * jnp.pi * f_sky * delta_ell)
 
     return ell_arr, M, M_G
-
 
 
