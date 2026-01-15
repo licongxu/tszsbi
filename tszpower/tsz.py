@@ -191,7 +191,6 @@ def get_integral_grid_trisp(params_values_dict=None):
     M_min = allparams['M_min']
     M_max = allparams['M_max']
     m_grid = jnp.geomspace(M_min, M_max, 100)
-
     # y_ell_mz_grid: shape = (n_z, n_m, n_ell)
     def get_yellm_for_z(zp):
         # Returns ell (length n_ell) and y_ellm (length n_m x n_ell)

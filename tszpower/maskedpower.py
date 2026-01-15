@@ -57,34 +57,149 @@ def compute_y0(M, z, params_values_dict=None):
 
     return y0
 
-def compute_theta500_arcmin(M, z, params_values_dict=None, delta = 500):
-    dA_z = classy_sz.get_angular_distance_at_z(z, params_values_dict=params_values_dict) 
-    r500 = classy_sz.get_r_delta_of_m_delta_at_z(delta=delta, m_delta=M, z=z, params_values_dict=params_values_dict) 
-    theta_500_arcmin = (r500/dA_z) * (180./jnp.pi) * 60.  # convert rad to arcmin
-    return theta_500_arcmin
+# def compute_theta500_arcmin(M, z, params_values_dict=None, delta = 500):
+#     # h = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)['H0']/100.
+#     dA_z = classy_sz.get_angular_distance_at_z(z, params_values_dict=params_values_dict) 
+#     r500 = classy_sz.get_r_delta_of_m_delta_at_z(delta=delta, m_delta=M, z=z, params_values_dict=params_values_dict) 
+#     theta_500_arcmin = (r500/(dA_z)) * (180./jnp.pi) * 60.  # convert rad to arcmin
+#     return theta_500_arcmin
 
-def compute_sigma_y0(M, z, params_values_dict, 
-                     sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy", 
-                     skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
-                     filter_name='immf6', theta_min=0.5, theta_max=32.0):
+def compute_theta500_arcmin(M500, z, params_values_dict=None):
+    rparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+
+    # Planck convention: (1-b) = 1/B
+    B = rparams["B"]
+    M_true = M500 / B
+
+    # CLASS Hubble in Mpc^{-1}
+    Hz  = classy_sz.get_hubble_at_z(z, params_values_dict)
+    H0c = classy_sz.get_hubble_at_z(0.0, params_values_dict)
+    Ez  = Hz / H0c   # dimensionless, CORRECT
+
+    # Angular diameter distance in Mpc
+    DA = classy_sz.get_angular_distance_at_z(z, params_values_dict)
+
+    # h for normalization factor
+    h = rparams["H0"] / 100.0  # dimensionless
+
+    theta_star = 6.997  # arcmin
+
+    theta_500 = (
+        theta_star
+        * (h / 0.7) ** (-2.0 / 3.0)
+        * (M_true /(h * 3.0e14)) ** (1.0 / 3.0)
+        * Ez ** (-2.0 / 3.0)
+        * (DA / 500.0) ** (-1.0)
+    )
+
+    return theta_500
+
+
+
+# def compute_sigma_y0(M, z, params_values_dict, 
+#                      sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy", 
+#                      skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+#                      filter_name='immf6', theta_min=0.5, theta_max=32.0):
+#     """
+#     Vectorized version.
+#     Inputs:
+#       M, z : scalars or 1D arrays with the same shape
+#     Returns:
+#       sigma_at_theta500 : same shape as inputs
+#       theta_500_arcmin  : same shape as inputs
+#     """
+
+#     # Load sigma curves & sky fractions (once)
+#     sigma_obj = jnp.load(sigma_obj_file, allow_pickle=True).item()  # {filter_name -> {tile_index -> 1D array over theta_500}}
+#     skyfr = jnp.load(skyfr_file).ravel()                            # shape (num_tiles,)
+
+#     # Reconstruct theta grid and sky-avg curve
+#     data = sigma_obj[filter_name]               # {tile_index -> 1D array over theta_500}
+#     first = next(iter(data.values()))
+#     ntheta = len(first)
+#     theta_grid = jnp.exp(jnp.linspace(jnp.log(theta_min), jnp.log(theta_max), ntheta))  # positive
+
+#     num = jnp.zeros(ntheta, dtype=float)
+#     den = jnp.array(0.0, dtype=float)
+#     for tile, arr in data.items():
+#         w = skyfr[int(tile)]
+#         y = jnp.asarray(arr, dtype=float)
+#         num += w * y
+#         den += w
+#     sigma_skyavg = num / den  # shape (ntheta,)
+
+#     # ---- LOG–LOG interpolation with linear extrapolation ----
+#     eps = 1e-20  # tiny floor to avoid log(0)
+#     log_theta = jnp.log(theta_grid)                           # strictly increasing
+#     log_sigma = jnp.log(jnp.clip(sigma_skyavg, eps, None))    # finite
+
+#     def interp_loglog_extrap(xg, yg, xq):
+#         """
+#         xg, yg: 1D arrays (monotonic xg)
+#         xq: any shape; returns yg(xq) using piecewise-linear interpolation in (xg, yg),
+#             extrapolating linearly beyond the ends using the end segments.
+#         """
+#         xq = jnp.asarray(xq)
+#         # indices i with xg[i] <= xq < xg[i+1]; clamp to [0, len-2] for extrapolation
+#         i = jnp.searchsorted(xg, xq, side='right') - 1
+#         i = jnp.clip(i, 0, xg.size - 2)
+
+#         x0 = xg[i]
+#         x1 = xg[i + 1]
+#         y0 = yg[i]
+#         y1 = yg[i + 1]
+
+#         t = (xq - x0) / (x1 - x0)
+#         return y0 + t * (y1 - y0)
+
+#     # Ensure array inputs; remember if inputs were scalar for output formatting
+#     M_arr = jnp.atleast_1d(M)
+#     z_arr = jnp.atleast_1d(z)
+#     if M_arr.shape != z_arr.shape:
+#         raise ValueError(f"M and z must have the same shape; got {M_arr.shape} vs {z_arr.shape}")
+
+#     # Vectorized theta_500(M,z)
+#     theta_500_arcmin = jax.vmap(lambda m, zz: compute_theta500_arcmin(m, zz, params_values_dict))(M_arr, z_arr)
+
+#     # Query in log-theta, interpolate/extrapolate in log–log, then exp back
+#     xi = jnp.log(theta_500_arcmin)
+#     log_sigma_q = interp_loglog_extrap(log_theta, log_sigma, xi)
+#     sigma_at_theta500 = jnp.exp(log_sigma_q).reshape(theta_500_arcmin.shape)
+
+#     # Scalar in → scalar out
+#     if jnp.ndim(M) == 0 and jnp.ndim(z) == 0:
+#         return sigma_at_theta500[0], theta_500_arcmin[0]
+#     else:
+#         return sigma_at_theta500, theta_500_arcmin
+
+
+import jax
+import jax.numpy as jnp
+
+def compute_sigma_y0(
+    M, z, params_values_dict,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5, theta_max=32.0,
+    poly_deg=3,   # <-- NEW: match cosmocnc (deg=3 for q_planck_sim)
+):
     """
-    Vectorized version.
-    Inputs:
-      M, z : scalars or 1D arrays with the same shape
-    Returns:
-      sigma_at_theta500 : same shape as inputs
-      theta_500_arcmin  : same shape as inputs
+    Same as before, but σ(θ) is evaluated by fitting:
+        log σ(θ) ≈ poly(log θ)
+    on the sky-averaged curve, then σ(θq)=exp(poly(log θq)).
+    This matches the method used in cosmocnc (second code).
     """
 
     # Load sigma curves & sky fractions (once)
-    sigma_obj = jnp.load(sigma_obj_file, allow_pickle=True).item()  # {filter_name -> {tile_index -> 1D array over theta_500}}
-    skyfr = jnp.load(skyfr_file).ravel()                            # shape (num_tiles,)
+    sigma_obj = jnp.load(sigma_obj_file, allow_pickle=True).item()
+    skyfr = jnp.load(skyfr_file).ravel()
 
     # Reconstruct theta grid and sky-avg curve
-    data = sigma_obj[filter_name]               # {tile_index -> 1D array over theta_500}
+    data = sigma_obj[filter_name]
     first = next(iter(data.values()))
     ntheta = len(first)
-    theta_grid = jnp.exp(jnp.linspace(jnp.log(theta_min), jnp.log(theta_max), ntheta))  # positive
+    theta_grid = jnp.exp(jnp.linspace(jnp.log(theta_min), jnp.log(theta_max), ntheta))
 
     num = jnp.zeros(ntheta, dtype=float)
     den = jnp.array(0.0, dtype=float)
@@ -93,31 +208,25 @@ def compute_sigma_y0(M, z, params_values_dict,
         y = jnp.asarray(arr, dtype=float)
         num += w * y
         den += w
-    sigma_skyavg = num / den  # shape (ntheta,)
+    sigma_skyavg = num / den  # (ntheta,)
 
-    # ---- LOG–LOG interpolation with linear extrapolation ----
-    eps = 1e-20  # tiny floor to avoid log(0)
-    log_theta = jnp.log(theta_grid)                           # strictly increasing
-    log_sigma = jnp.log(jnp.clip(sigma_skyavg, eps, None))    # finite
+    # ------------------------------------------------------------------
+    # CHANGE STARTS HERE: polynomial fit in log–log, like cosmocnc
+    # ------------------------------------------------------------------
+    eps = 1e-20
+    x = jnp.log(theta_grid)                         # log θ
+    y = jnp.log(jnp.clip(sigma_skyavg, eps, None))  # log σ
 
-    def interp_loglog_extrap(xg, yg, xq):
-        """
-        xg, yg: 1D arrays (monotonic xg)
-        xq: any shape; returns yg(xq) using piecewise-linear interpolation in (xg, yg),
-            extrapolating linearly beyond the ends using the end segments.
-        """
-        xq = jnp.asarray(xq)
-        # indices i with xg[i] <= xq < xg[i+1]; clamp to [0, len-2] for extrapolation
-        i = jnp.searchsorted(xg, xq, side='right') - 1
-        i = jnp.clip(i, 0, xg.size - 2)
+    # Fit y ≈ Σ c_k x^k (poly_deg). jnp.polyfit returns highest power first.
+    coeff = jnp.polyfit(x, y, deg=poly_deg)
 
-        x0 = xg[i]
-        x1 = xg[i + 1]
-        y0 = yg[i]
-        y1 = yg[i + 1]
-
-        t = (xq - x0) / (x1 - x0)
-        return y0 + t * (y1 - y0)
+    # Polyval (JAX)
+    def polyval(c, xx):
+        # Horner scheme; c is highest power first
+        out = jnp.zeros_like(xx)
+        for ck in c:
+            out = out * xx + ck
+        return out
 
     # Ensure array inputs; remember if inputs were scalar for output formatting
     M_arr = jnp.atleast_1d(M)
@@ -126,11 +235,13 @@ def compute_sigma_y0(M, z, params_values_dict,
         raise ValueError(f"M and z must have the same shape; got {M_arr.shape} vs {z_arr.shape}")
 
     # Vectorized theta_500(M,z)
-    theta_500_arcmin = jax.vmap(lambda m, zz: compute_theta500_arcmin(m, zz, params_values_dict))(M_arr, z_arr)
+    theta_500_arcmin = jax.vmap(
+        lambda m, zz: compute_theta500_arcmin(m, zz, params_values_dict)
+    )(M_arr, z_arr)
 
-    # Query in log-theta, interpolate/extrapolate in log–log, then exp back
-    xi = jnp.log(theta_500_arcmin)
-    log_sigma_q = interp_loglog_extrap(log_theta, log_sigma, xi)
+    # Evaluate σ at θ500 via polynomial in log–log
+    log_theta_q = jnp.log(theta_500_arcmin)
+    log_sigma_q = polyval(coeff, log_theta_q)
     sigma_at_theta500 = jnp.exp(log_sigma_q).reshape(theta_500_arcmin.shape)
 
     # Scalar in → scalar out
@@ -241,16 +352,17 @@ def _integrate_mz(integrand, z_grid, logm_grid):
     z_grid   : (n_z,)
     logm_grid: (n_m,)
     """
-    dx_m = logm_grid[1] - logm_grid[0]
-    dx_z = z_grid[1] - z_grid[0]
+    # dx_m = logm_grid[1] - logm_grid[0]
+    # dx_z = z_grid[1] - z_grid[0]
 
     ell = get_ell_range()          # (n_ell,)
     n_ell = ell.shape[0]
 
     def scan_body(_, i):
         integrand_i = integrand[:, :, i]                           # (n_z, n_m)
-        partial_m = simpson(integrand_i, x=logm_grid, dx=dx_m, axis=1)  # (n_z,)
-        result    = simpson(partial_m,   x=z_grid,    dx=dx_z,   axis=0)  # scalar
+        partial_m = simpson(integrand_i, x=logm_grid, axis=1)
+        result    = simpson(partial_m,   x=z_grid,    axis=0)
+
         return None, result
 
     _, C_yy = lax.scan(scan_body, None, jnp.arange(n_ell))
@@ -356,7 +468,15 @@ def compute_integral_snr_simple_RC(
     return C_yy
 
 
-@jax.jit
+@partial(jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+    ),
+)
 def compute_number_resolved_clusters(
     params_values_dict=None,
     *,
@@ -512,8 +632,8 @@ def compute_cluster_counts_in_z_snr_bins(
         integrand_bin = integrand_N * mask                 # (n_z, n_m)
 
         # integrate over lnM then z
-        partial_m = simpson(integrand_bin, x=logm_grid, dx=dx_m, axis=1)  # (n_z,)
-        N_fullsky_bin = simpson(partial_m, x=z_grid, dx=dx_z, axis=0)     # scalar
+        partial_m = simpson(integrand_bin, x=logm_grid, axis=1)  # (n_z,)
+        N_fullsky_bin = simpson(partial_m, x=z_grid, axis=0)     # scalar
 
         return f_sky * N_fullsky_bin
 
@@ -653,13 +773,13 @@ def compute_tsz_covariance_masked_snr(
 
     @jax.jit
     def _integrate_mz(integrand, z_grid, logm_grid):
-        dx_m = logm_grid[1] - logm_grid[0]
-        dx_z = z_grid[1] - z_grid[0]
+        # dx_m = logm_grid[1] - logm_grid[0]
+        # dx_z = z_grid[1] - z_grid[0]
 
         def scan_body(_, i):
             integ_i = integrand[:, :, i]  # (n_z,n_m)
-            partial_m = simpson(integ_i, x=logm_grid, dx=dx_m, axis=1)  # (n_z,)
-            res = simpson(partial_m, x=z_grid, dx=dx_z, axis=0)         # scalar
+            partial_m = simpson(integ_i, x=logm_grid, axis=1)  # (n_z,)
+            res = simpson(partial_m, x=z_grid, axis=0)         # scalar
             return None, res
 
         _, C = lax.scan(scan_body, None, jnp.arange(integrand.shape[-1]))
@@ -980,7 +1100,7 @@ def completeness_convolution_jax(
     """
     # safety
     q_bar      = jnp.maximum(q_bar,      1e-30)
-    sigma_lnY  = jnp.maximum(sigma_lnY,  1e-12)
+    sigma_lnY  = jnp.maximum(sigma_lnY,  1e-30)
 
     # integration bounds in ln-space
     mu  = jnp.log(q_bar)
@@ -1072,8 +1192,8 @@ def compute_number_detected_clusters_completeness(
 
     # --- integrate counts weighted by completeness ---
     integrand = dN_dzdlnM * P_det/(2*jnp.sqrt(2*jnp.pi)*sigma_lnY)  # (n_z, n_m)
-    partial_m = simpson(integrand, x=logm_grid, dx=dx_m, axis=1)  # (n_z,)
-    N_fullsky = simpson(partial_m, x=z_grid, dx=dx_z, axis=0)     # scalar
+    partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z,)
+    N_fullsky = simpson(partial_m, x=z_grid, axis=0)     # scalar
 
     return f_sky * N_fullsky
 
@@ -1172,8 +1292,8 @@ def compute_cluster_counts_in_z_q_bins_completeness(
         mask_z = ((z_grid >= z_l) & (z_grid < z_h))[:, None]  # (n_z, 1)
         integrand = dN_dzdlnM * P_q_mz * mask_z               # (n_z, n_m)
 
-        partial_m = simpson(integrand, x=logm_grid, dx=dx_m, axis=1)  # (n_z,)
-        val = simpson(partial_m, x=z_grid, dx=dx_z, axis=0)           # scalar
+        partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z,)
+        val = simpson(partial_m, x=z_grid, axis=0)           # scalar
         return f_sky * val
 
     one_qbin = lambda P_q_mz: jax.vmap(lambda zl, zh: one_cell(zl, zh, P_q_mz))(zlo, zhi)  # (n_z_bins,)
@@ -1181,3 +1301,211 @@ def compute_cluster_counts_in_z_q_bins_completeness(
     N_bins = jnp.swapaxes(N_bins, 0, 1)            # (n_z_bins, n_q_bins)
 
     return N_bins, z_edges, q_edges
+
+
+## TESTING SO NOISE BELOW:
+# import os
+# import numpy as np
+# import jax
+# import jax.numpy as jnp
+# import jax.scipy.special as jsp
+# from functools import partial
+# # -----------------------------
+# # 0) Load SO noise (theta, sig)
+# # -----------------------------
+# def load_so_mf_noise(
+#     noise_path="/scratch/scratch-lxu/cosmocnc/data/so_sim_sz_mf_noise.npy"
+# ):
+#     if not os.path.exists(noise_path):
+#         raise FileNotFoundError(f"SO noise file not found: {noise_path}")
+
+#     mf_noise = np.load(noise_path, allow_pickle=True)
+
+#     # Expect shape (2, N): [theta, sigma]
+#     theta_rad = np.asarray(mf_noise[0], dtype=float)   # degrees in file
+#     theta  = theta_rad * (180.0 / jnp.pi) * 60.0
+
+#                           # convert to arcmin
+#     sigma = np.asarray(mf_noise[1], dtype=float)
+
+
+#     if theta.ndim != 1 or sigma.ndim != 1 or theta.size != sigma.size:
+#         raise ValueError(f"Unexpected mf_noise arrays: theta {theta.shape}, sigma {sigma.shape}")
+
+#     # sort if needed
+#     if not np.all(np.diff(theta) > 0):
+#         idx = np.argsort(theta)
+#         theta = theta[idx]
+#         sigma = sigma[idx]
+
+#     # sanity: positive
+#     if np.any(theta <= 0) or np.any(sigma <= 0):
+#         raise ValueError("SO noise curve contains non-positive theta or sigma values.")
+
+#     return theta, sigma
+
+
+# # -------------------------------------------------
+# # 1) JAX log-log interpolation with linear extrapol
+# # -------------------------------------------------
+# @jax.jit
+# def _interp_lin_extrap_1d(xg, yg, xq):
+#     i = jnp.searchsorted(xg, xq, side="right") - 1
+#     i = jnp.clip(i, 0, xg.size - 2)
+#     x0 = xg[i]
+#     x1 = xg[i + 1]
+#     y0 = yg[i]
+#     y1 = yg[i + 1]
+#     t = (xq - x0) / (x1 - x0)
+#     return y0 + t * (y1 - y0)
+
+
+# def make_sigma_y0_from_theta500_so(theta_arcmin_np, sigma_np):
+#     """
+#     Return a JIT-able function sigma_y0(theta500_arcmin) built from the SO curve,
+#     using log-log interpolation and linear extrapolation at the ends.
+#     """
+#     eps = 1e-30
+#     theta_g = jnp.asarray(theta_arcmin_np)
+#     sig_g = jnp.asarray(sigma_np)
+
+#     log_theta_g = jnp.log(jnp.clip(theta_g, eps, None))
+#     log_sig_g = jnp.log(jnp.clip(sig_g, eps, None))
+
+#     @jax.jit
+#     def sigma_y0(theta500_arcmin):
+#         xq = jnp.log(jnp.clip(theta500_arcmin, eps, None))
+#         log_sig_q = _interp_lin_extrap_1d(log_theta_g, log_sig_g, xq)
+#         return jnp.exp(log_sig_q)
+
+#     return sigma_y0
+
+
+# # ---------------------------------------------------------
+# # 2) Two-layer detection probability (intrinsic + meas. noise)
+# # ---------------------------------------------------------
+# @partial(jax.jit, static_argnames=("n_grid", "nsig"))
+# def pdet_two_layer(
+#     q_bar,          # mean "matched-filter" SNR (y0/sigma_y0(theta500))
+#     sigma_lnY,      # intrinsic scatter in ln q_m
+#     q_cat,          # catalog threshold on observed SNR
+#     *,
+#     n_grid=4096,
+#     nsig=16.0,
+# ):
+#     """
+#     Model:
+#       ln q_m ~ Normal(ln q_bar, sigma_lnY^2)      (intrinsic)
+#       q_obs = q_m + N(0,1)                        (measurement; unit variance)
+#     Then:
+#       P_det = ∫ d ln q_m  N(ln q_m; ln q_bar, sigma_lnY^2) * P(q_obs > q_cat | q_m)
+#            = ∫ d ln q_m  N(...) * 0.5*erfc((q_cat - q_m)/sqrt(2))
+#     """
+#     q_bar = jnp.maximum(q_bar, 1e-30)
+#     sigma_lnY = jnp.maximum(sigma_lnY, 1e-12)
+
+#     mu = jnp.log(q_bar)
+#     t0 = mu - nsig * sigma_lnY
+#     t1 = mu + nsig * sigma_lnY
+
+#     t = jnp.linspace(t0, t1, n_grid)    # t = ln q_m
+#     q_m = jnp.exp(t)
+
+#     gauss = jnp.exp(-0.5 * ((t - mu) / sigma_lnY) ** 2) / (jnp.sqrt(2.0 * jnp.pi) * sigma_lnY)
+
+#     tail = 0.5 * jsp.erfc((q_cat - q_m) / jnp.sqrt(2.0))
+
+#     return jnp.trapezoid(gauss * tail, x=t)
+
+
+# # --------------------------------------------
+# # 3) Build qbar(M,z) grid using SO sigma(theta)
+# # --------------------------------------------
+# def build_qbar_grid_so_noise(
+#     m_grid, z_grid, params_values_dict,
+#     *,
+#     noise_path="/scratch/scratch-lxu/cosmocnc/data/so_sim_sz_mf_noise.npy",
+# ):
+#     """
+#     Returns qbar_grid(z,m) = y0(M,z)/sigma_y0_SO(theta500(M,z))
+#     shape (n_z, n_m)
+#     """
+#     theta_np, sigma_np = load_so_mf_noise(noise_path=noise_path)
+#     sigma_y0_from_theta500 = make_sigma_y0_from_theta500_so(theta_np, sigma_np)
+
+#     @jax.jit
+#     def qbar_one(m, z):
+#         y0 = compute_y0(m, z, params_values_dict=params_values_dict)
+#         th = compute_theta500_arcmin(m, z, params_values_dict=params_values_dict)
+#         sig = sigma_y0_from_theta500(th)
+#         return y0 / sig
+
+#     def qbar_at_z(z):
+#         return jax.vmap(lambda m: qbar_one(m, z))(m_grid)  # (n_m,)
+
+#     return jax.vmap(qbar_at_z)(z_grid)  # (n_z, n_m)
+
+
+# # -------------------------------------------------------
+# # 4) Main test: N_det with SO noise + two-layer scattering
+# # -------------------------------------------------------
+# def test_number_detected_clusters_so_noise(
+#     params_values_dict=None,
+#     *,
+#     q_cat=5.0,
+#     sigma_lnY=0.2,
+#     f_sky=0.4,
+#     n_m=100,
+#     n_z=100,
+#     n_grid=4096,
+#     nsig=16.0,
+#     noise_path="/scratch/scratch-lxu/cosmocnc/data/so_sim_sz_mf_noise.npy",
+# ):
+#     """
+#     Computes:
+#       N_det = f_sky * ∫ dz ∫ dlnM [dN/(dz dlnM)] * P_det(M,z)
+#     with P_det from pdet_two_layer, and q_bar from SO noise curve.
+
+#     Prints diagnostics and returns N_det (DeviceArray scalar).
+#     """
+#     # --- grids (match your package conventions) ---
+#     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+#     z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], n_z)
+#     m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], n_m)
+#     logm_grid = jnp.log(m_grid)
+
+#     # --- full-sky dN/(dz dlnM) from your code (includes 4π already) ---
+#     integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)  # (n_z, n_m, 1)
+#     dN_dzdlnM = integrand_full[:, :, 0]  # (n_z, n_m)
+
+#     # --- q_bar grid using SO noise curve ---
+#     qbar_grid = build_qbar_grid_so_noise(
+#         m_grid, z_grid, params_values_dict,
+#         noise_path=noise_path,
+#     )  # (n_z, n_m)
+
+#     # --- P_det grid ---
+#     qbar_flat = qbar_grid.reshape(-1)
+#     Pdet_flat = jax.vmap(lambda qb: pdet_two_layer(qb, sigma_lnY, q_cat, n_grid=n_grid, nsig=nsig))(qbar_flat)
+#     Pdet = Pdet_flat.reshape(qbar_grid.shape)
+
+#     # --- integrate over lnM and z (Simpson) ---
+#     weighted = dN_dzdlnM * Pdet
+#     partial_m = simpson(weighted, x=logm_grid, axis=1)  # (n_z,)
+#     N_fullsky = simpson(partial_m, x=z_grid, axis=0)    # scalar
+
+#     N_det = f_sky * N_fullsky
+
+#     # --- diagnostics ---
+#     # (materialize a few scalars for printing)
+#     qmin = float(jnp.min(qbar_grid))
+#     qmax = float(jnp.max(qbar_grid))
+#     pmin = float(jnp.min(Pdet))
+#     pmax = float(jnp.max(Pdet))
+#     print("SO noise path:", noise_path)
+#     print(f"q_cat={q_cat}, sigma_lnY={sigma_lnY}, f_sky={f_sky}")
+#     print(f"qbar_grid range: [{qmin:.3e}, {qmax:.3e}]")
+#     print(f"Pdet range:      [{pmin:.3e}, {pmax:.3e}]")
+#     print("N_det =", float(N_det))
+
+#     return N_det
