@@ -1345,7 +1345,7 @@ def compute_cluster_counts_in_z_q_bins_completeness(
     # m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
     # match cosmocnc-style resolution
     n_z_hmf = int(allparams.get("n_z", 1024))
-    n_m_hmf = int(allparams.get("n_points_data_lik", 100))
+    n_m_hmf = int(allparams.get("n_points_data_lik", 50))
 
     z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], n_z_hmf)
     m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], n_m_hmf)
