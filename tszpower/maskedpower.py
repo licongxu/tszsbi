@@ -1198,54 +1198,180 @@ def compute_number_detected_clusters_completeness(
     return f_sky * N_fullsky
 
 
-@partial(jax.jit, static_argnames=("n_grid", "nsig", "n_q_bins", "n_z_bins"))
+# @partial(jax.jit, static_argnames=("n_grid", "nsig", "n_q_bins", "n_z_bins"))
+# def compute_cluster_counts_in_z_q_bins_completeness(
+#     params_values_dict=None,
+#     *,
+#     sigma_lnY,
+#     # requested defaults
+#     q_min=5.0,
+#     q_max=200.0,
+#     n_q_bins=20,
+#     z_min_bin=0.005,
+#     z_max_bin=3.0,
+#     n_z_bins=20,
+#     f_sky=1.0,
+#     # SNR/noise curve inputs
+#     sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+#     skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+#     filter_name="immf6",
+#     theta_min=0.5,
+#     theta_max=32.0,
+#     # completeness integral controls
+#     n_grid=4096,
+#     nsig=16.0,
+# ):
+#     """
+#     Returns:
+#       N_bins: (n_z_bins, n_q_bins)
+#       z_edges: (n_z_bins+1,)
+#       q_edges: (n_q_bins+1,)
+
+#     Here q is the *catalog SNR* threshold variable q_cat.
+#     Bin probability uses the correct ordering since P_det(q_cat) decreases with q_cat:
+#         P(q in [q_lo,q_hi)) = P_det(q_lo) - P_det(q_hi)
+#     """
+
+#     # ---- grids used for the M,z integration ----
+#     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+#     z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
+#     m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
+#     logm_grid = jnp.log(m_grid)
+
+#     dx_m = logm_grid[1] - logm_grid[0]
+#     dx_z = z_grid[1] - z_grid[0]
+
+#     # ---- base dN/(dz dlnM), full-sky (includes 4π) ----
+#     integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)
+#     dN_dzdlnM = integrand_full[:, :, 0]  # (n_z, n_m)
+
+#     # ---- qbar(M,z) grid ----
+#     qbar_grid = build_snr_grid(
+#         m_grid, z_grid, params_values_dict,
+#         sigma_obj_file=sigma_obj_file,
+#         skyfr_file=skyfr_file,
+#         filter_name=filter_name,
+#         theta_min=theta_min,
+#         theta_max=theta_max,
+#     )
+#     qbar_flat = qbar_grid.reshape(-1)
+
+#     # ---- bin edges (clip z-range to overlap the integration grid) ----
+#     z_lo_eff = jnp.maximum(z_min_bin, z_grid.min())
+#     z_hi_eff = jnp.minimum(z_max_bin, z_grid.max())
+#     z_edges = jnp.linspace(z_lo_eff, z_hi_eff, n_z_bins + 1)
+
+#     q_edges = jnp.linspace(q_min, q_max, n_q_bins + 1)
+
+#     # ---- completeness evaluated at all q_edges ----
+#     def Pdet_at_qedge(qc):
+#         return jax.vmap(
+#             lambda qb: completeness_convolution_jax(qb, sigma_lnY, qc, n_grid=n_grid, nsig=nsig)
+#         )(qbar_flat)
+
+#     Pdet_edges_flat = jax.vmap(Pdet_at_qedge)(q_edges)  # (n_q+1, n_z*n_m)
+#     Pdet_edges = Pdet_edges_flat.reshape((n_q_bins + 1,) + qbar_grid.shape)  # (n_q+1, n_z, n_m)
+
+#     # normalize exactly like your working N_det:
+#     # (your g ranges up to 2, hence the extra factor 2)
+#     norm = 2.0 * jnp.sqrt(2.0 * jnp.pi) * sigma_lnY
+#     Pdet_edges = Pdet_edges / norm
+
+#     # ---- probability mass in each q-bin [q_j, q_{j+1}) ----
+#     # IMPORTANT: Pdet decreases with q_cat, so use Pdet(q_lo) - Pdet(q_hi)
+#     Pbin = Pdet_edges[:-1, :, :] - Pdet_edges[1:, :, :]   # (n_q_bins, n_z, n_m)
+
+#     # numerical safety (should already be >=0, but keep tiny negatives from quadrature)
+#     Pbin = jnp.clip(Pbin, 0.0, 1.0)
+
+#     # ---- z-bin integration ----
+#     zlo = z_edges[:-1]
+#     zhi = z_edges[1:]
+
+#     def one_cell(z_l, z_h, P_q_mz):
+#         mask_z = ((z_grid >= z_l) & (z_grid < z_h))[:, None]  # (n_z, 1)
+#         integrand = dN_dzdlnM * P_q_mz * mask_z               # (n_z, n_m)
+
+#         partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z,)
+#         val = simpson(partial_m, x=z_grid, axis=0)           # scalar
+#         return f_sky * val
+
+#     one_qbin = lambda P_q_mz: jax.vmap(lambda zl, zh: one_cell(zl, zh, P_q_mz))(zlo, zhi)  # (n_z_bins,)
+#     N_bins = jax.vmap(one_qbin)(Pbin)              # (n_q_bins, n_z_bins)
+#     N_bins = jnp.swapaxes(N_bins, 0, 1)            # (n_z_bins, n_q_bins)
+
+#     return N_bins, z_edges, q_edges
+
+
+# Assumes you already have:
+# - classy_sz.get_all_relevant_params
+# - get_integrand_number_counts(params_values_dict=...)
+# - build_snr_grid(m_grid, z_grid, params_values_dict, ...)
+# - completeness_convolution_jax(qbar, sigma_lnY, q_cat, n_grid=..., nsig=...)
+# - simpson(y, x=..., axis=...)
+
+
+@partial(jax.jit, static_argnames=("n_grid", "nsig"))
 def compute_cluster_counts_in_z_q_bins_completeness(
     params_values_dict=None,
     *,
     sigma_lnY,
-    # requested defaults
-    q_min=5.0,
-    q_max=200.0,
-    n_q_bins=20,
-    z_min_bin=0.005,
-    z_max_bin=3.0,
-    n_z_bins=20,
+    z_edges,          # (n_z_bins+1,)
+    q_edges,          # (n_q_bins+1,)
     f_sky=1.0,
-    # SNR/noise curve inputs
     sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
     skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
     filter_name="immf6",
     theta_min=0.5,
     theta_max=32.0,
-    # completeness integral controls
     n_grid=4096,
     nsig=16.0,
 ):
     """
-    Returns:
-      N_bins: (n_z_bins, n_q_bins)
-      z_edges: (n_z_bins+1,)
-      q_edges: (n_q_bins+1,)
-
-    Here q is the *catalog SNR* threshold variable q_cat.
-    Bin probability uses the correct ordering since P_det(q_cat) decreases with q_cat:
-        P(q in [q_lo,q_hi)) = P_det(q_lo) - P_det(q_hi)
+    Returns
+    -------
+    Nz : (n_z_bins,)
+        N(z) marginalised over q ∈ [q_min, q_max]
+    Nq : (n_q_bins,)
+        N(q) marginalised over z and q ∈ [q_j, ∞)
     """
 
-    # ---- grids used for the M,z integration ----
+    # ------------------------------------------------------------------
+    # 1) Theory grid (unchanged)
+    # ------------------------------------------------------------------
     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
-    z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
-    m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
+
+    # z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
+    # m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
+    # match cosmocnc-style resolution
+    n_z_hmf = int(allparams.get("n_z", 1024))
+    n_m_hmf = int(allparams.get("n_points_data_lik", 100))
+
+    z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], n_z_hmf)
+    m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], n_m_hmf)
+
     logm_grid = jnp.log(m_grid)
 
-    dx_m = logm_grid[1] - logm_grid[0]
-    dx_z = z_grid[1] - z_grid[0]
+    # integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)
+    # dN_dzdlnM = integrand_full[:, :, 0]   # (n_z, n_m)
 
-    # ---- base dN/(dz dlnM), full-sky (includes 4π) ----
-    integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)
-    dN_dzdlnM = integrand_full[:, :, 0]  # (n_z, n_m)
+        # --- build dN/(dz dlnM) directly on (z_grid, m_grid) ---
+    # dn/dlnM(M,z)
+    def hmf_at_z(z):
+        return get_hmf_at_z_and_m(z=z, m=m_grid, params_values_dict=params_values_dict)
 
-    # ---- qbar(M,z) grid ----
+    dndlnm = jax.vmap(hmf_at_z)(z_grid)          # (n_z, n_m)
+
+    # dV/dz/dΩ(z)
+    dVdz = dVdzdOmega(z_grid, params_values_dict=params_values_dict)  # (n_z,)
+
+    # full-sky factor included (4π)
+    dN_dzdlnM = 4.0 * jnp.pi * dndlnm * dVdz[:, None]
+
+
+    # ------------------------------------------------------------------
+    # 2) q̄(M,z)
+    # ------------------------------------------------------------------
     qbar_grid = build_snr_grid(
         m_grid, z_grid, params_values_dict,
         sigma_obj_file=sigma_obj_file,
@@ -1256,51 +1382,73 @@ def compute_cluster_counts_in_z_q_bins_completeness(
     )
     qbar_flat = qbar_grid.reshape(-1)
 
-    # ---- bin edges (clip z-range to overlap the integration grid) ----
-    z_lo_eff = jnp.maximum(z_min_bin, z_grid.min())
-    z_hi_eff = jnp.minimum(z_max_bin, z_grid.max())
-    z_edges = jnp.linspace(z_lo_eff, z_hi_eff, n_z_bins + 1)
-
-    q_edges = jnp.linspace(q_min, q_max, n_q_bins + 1)
-
-    # ---- completeness evaluated at all q_edges ----
-    def Pdet_at_qedge(qc):
-        return jax.vmap(
-            lambda qb: completeness_convolution_jax(qb, sigma_lnY, qc, n_grid=n_grid, nsig=nsig)
-        )(qbar_flat)
-
-    Pdet_edges_flat = jax.vmap(Pdet_at_qedge)(q_edges)  # (n_q+1, n_z*n_m)
-    Pdet_edges = Pdet_edges_flat.reshape((n_q_bins + 1,) + qbar_grid.shape)  # (n_q+1, n_z, n_m)
-
-    # normalize exactly like your working N_det:
-    # (your g ranges up to 2, hence the extra factor 2)
+    # ------------------------------------------------------------------
+    # 3) Completeness function P_det(q_cat)
+    # ------------------------------------------------------------------
     norm = 2.0 * jnp.sqrt(2.0 * jnp.pi) * sigma_lnY
-    Pdet_edges = Pdet_edges / norm
 
-    # ---- probability mass in each q-bin [q_j, q_{j+1}) ----
-    # IMPORTANT: Pdet decreases with q_cat, so use Pdet(q_lo) - Pdet(q_hi)
-    Pbin = Pdet_edges[:-1, :, :] - Pdet_edges[1:, :, :]   # (n_q_bins, n_z, n_m)
+    def Pdet(qc):
+        raw = jax.vmap(
+            lambda qb: completeness_convolution_jax(
+                qb, sigma_lnY, qc, n_grid=n_grid, nsig=nsig
+            )
+        )(qbar_flat)
+        return (raw / norm).reshape(qbar_grid.shape)
 
-    # numerical safety (should already be >=0, but keep tiny negatives from quadrature)
-    Pbin = jnp.clip(Pbin, 0.0, 1.0)
+    # ------------------------------------------------------------------
+    # 4) N(z): marginalise over q >= q_min
+    # ------------------------------------------------------------------
+    q_min = q_edges[0]
+    Pdet_qmin = Pdet(q_min)
 
-    # ---- z-bin integration ----
-    zlo = z_edges[:-1]
-    zhi = z_edges[1:]
+    dz = z_grid[1:] - z_grid[:-1]
+    Nz = []
 
-    def one_cell(z_l, z_h, P_q_mz):
-        mask_z = ((z_grid >= z_l) & (z_grid < z_h))[:, None]  # (n_z, 1)
-        integrand = dN_dzdlnM * P_q_mz * mask_z               # (n_z, n_m)
+    for i in range(len(z_edges) - 1):
+        zlo, zhi = z_edges[i], z_edges[i + 1]
+        mask_z = (z_grid >= zlo) & (z_grid < zhi)
 
-        partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z,)
-        val = simpson(partial_m, x=z_grid, axis=0)           # scalar
-        return f_sky * val
+        Iz = simpson(
+            dN_dzdlnM * Pdet_qmin * mask_z[:, None],
+            x=logm_grid,
+            axis=1,
+        )
+        Nz_bin = f_sky * simpson(Iz, x=z_grid)
+        Nz.append(Nz_bin)
 
-    one_qbin = lambda P_q_mz: jax.vmap(lambda zl, zh: one_cell(zl, zh, P_q_mz))(zlo, zhi)  # (n_z_bins,)
-    N_bins = jax.vmap(one_qbin)(Pbin)              # (n_q_bins, n_z_bins)
-    N_bins = jnp.swapaxes(N_bins, 0, 1)            # (n_z_bins, n_q_bins)
+    Nz = jnp.asarray(Nz)
 
-    return N_bins, z_edges, q_edges
+    # ------------------------------------------------------------------
+    # 5) N(q): marginalise over ALL z, integrate q ∈ [q_j, q_{j+1}]
+    # ------------------------------------------------------------------
+    Nq = []
+
+    for j in range(len(q_edges) - 1):
+        q_lo = q_edges[j]
+        q_hi = q_edges[j + 1]
+
+        # completeness at both edges
+        Pdet_lo = Pdet(q_lo)
+        Pdet_hi = Pdet(q_hi)
+
+        # probability mass in this q-bin
+        Pbin_q = jnp.clip(Pdet_lo - Pdet_hi, 0.0, 1.0)
+
+        Iz = simpson(
+            dN_dzdlnM * Pbin_q,
+            x=logm_grid,
+            axis=1,
+        )
+        Nq_j = f_sky * simpson(Iz, x=z_grid)
+        Nq.append(Nq_j)
+
+    Nq = jnp.asarray(Nq)
+
+
+    return Nz, Nq
+
+
+
 
 
 ## TESTING SO NOISE BELOW:
