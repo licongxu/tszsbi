@@ -538,12 +538,131 @@ def compute_number_resolved_clusters(
 
     return N_res
 
-@jax.jit
-def compute_cluster_counts_in_z_snr_bins(
+# @jax.jit
+# def compute_cluster_counts_in_z_snr_bins(
+#     params_values_dict=None,
+#     *,
+#     z_bin_edges=None,      # 1D array of size (n_z_bins + 1)
+#     snr_bin_edges=None,    # 1D array of size (n_snr_bins + 1), in SNR (not ln SNR)
+#     f_sky=1.0,
+#     sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+#     skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+#     filter_name="immf6",
+#     theta_min=0.5,
+#     theta_max=32.0,
+# ):
+#     """
+#     Compute the number of clusters in each (z, SNR) bin.
+
+#     Returns
+#     -------
+#     N_bins : jnp.ndarray, shape (n_z_bins, n_snr_bins)
+#         N_bins[i, j] = number of clusters in:
+#             z ∈ [z_bin_edges[i],   z_bin_edges[i+1]),
+#             SNR ∈ [snr_bin_edges[j], snr_bin_edges[j+1]),
+#         scaled by f_sky (4π already included in get_integrand_number_counts).
+#     """
+
+#     if z_bin_edges is None or snr_bin_edges is None:
+#         raise ValueError("z_bin_edges and snr_bin_edges must be provided.")
+
+#     z_bin_edges = jnp.asarray(z_bin_edges)
+#     snr_bin_edges = jnp.asarray(snr_bin_edges)
+
+#     # --- reproduce grids used in your tSZ & SNR integrals ---
+#     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+#     z_min, z_max = allparams['z_min'], allparams['z_max']
+#     z_grid = jnp.geomspace(z_min, z_max, 100)              # (n_z,)
+
+#     M_min, M_max = allparams['M_min'], allparams['M_max']
+#     m_grid = jnp.geomspace(M_min, M_max, 100)              # (n_m,)
+#     logm_grid = jnp.log(m_grid)
+
+#     dx_m = logm_grid[1] - logm_grid[0]
+#     dx_z = z_grid[1] - z_grid[0]
+
+#     # --- base integrand: 4π * dV/dz/dΩ * dn/dlnM ---
+#     # get_integrand_number_counts returns shape (n_z, n_m, 1)
+#     integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)
+#     integrand_N = integrand_full[:, :, 0]   # (n_z, n_m), full-sky
+
+#     # --- SNR grid on same (z, M) grid ---
+#     snr_grid = build_snr_grid(
+#         m_grid,
+#         z_grid,
+#         params_values_dict,
+#         sigma_obj_file=sigma_obj_file,
+#         skyfr_file=skyfr_file,
+#         filter_name=filter_name,
+#         theta_min=theta_min,
+#         theta_max=theta_max,
+#     )  # shape (n_z, n_m)
+
+#     # --- build all bin combinations (z_i, snr_j) ---
+#     z_min_edges = z_bin_edges[:-1]
+#     z_max_edges = z_bin_edges[1:]
+#     q_min_edges = snr_bin_edges[:-1]
+#     q_max_edges = snr_bin_edges[1:]
+
+#     # meshgrid to get all (z_bin, snr_bin) pairs
+#     Zmin, Qmin = jnp.meshgrid(z_min_edges, q_min_edges, indexing="ij")
+#     Zmax, Qmax = jnp.meshgrid(z_max_edges, q_max_edges, indexing="ij")
+
+#     Zmin_flat = Zmin.ravel()
+#     Zmax_flat = Zmax.ravel()
+#     Qmin_flat = Qmin.ravel()
+#     Qmax_flat = Qmax.ravel()
+
+#     def count_one_bin(z_lo, z_hi, q_lo, q_hi):
+#         """
+#         Integrate over z and lnM with masks:
+#           z_lo <= z < z_hi
+#           q_lo <= SNR < q_hi
+#         """
+#         # mask in z
+#         mask_z = (z_grid >= z_lo) & (z_grid < z_hi)        # (n_z,)
+#         mask_z = mask_z[:, None]                           # (n_z, 1)
+
+#         # mask in SNR
+#         mask_snr = (snr_grid >= q_lo) & (snr_grid < q_hi)  # (n_z, n_m)
+
+#         mask = mask_z & mask_snr                           # (n_z, n_m)
+#         mask = mask.astype(integrand_N.dtype)
+
+#         integrand_bin = integrand_N * mask                 # (n_z, n_m)
+
+#         # integrate over lnM then z
+#         partial_m = simpson(integrand_bin, x=logm_grid, axis=1)  # (n_z,)
+#         N_fullsky_bin = simpson(partial_m, x=z_grid, axis=0)     # scalar
+
+#         return f_sky * N_fullsky_bin
+
+#     # vmap over all flattened bin pairs
+#     count_vmap = jax.vmap(count_one_bin)
+#     N_flat = count_vmap(Zmin_flat, Zmax_flat, Qmin_flat, Qmax_flat)
+
+#     # reshape back to (n_z_bins, n_snr_bins)
+#     n_z_bins = z_bin_edges.size - 1
+#     n_snr_bins = snr_bin_edges.size - 1
+#     N_bins = N_flat.reshape((n_z_bins, n_snr_bins))
+
+#     return N_bins
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+    ),
+)
+def compute_cluster_counts_in_z_q_2d_bins_tophat(
     params_values_dict=None,
     *,
-    z_bin_edges=None,      # 1D array of size (n_z_bins + 1)
-    snr_bin_edges=None,    # 1D array of size (n_snr_bins + 1), in SNR (not ln SNR)
+    z_edges,          # (n_z_bins+1,)
+    q_edges,          # (n_q_bins+1,)
     f_sky=1.0,
     sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
     skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
@@ -552,41 +671,45 @@ def compute_cluster_counts_in_z_snr_bins(
     theta_max=32.0,
 ):
     """
-    Compute the number of clusters in each (z, SNR) bin.
+    Top-hat completeness (no intrinsic scatter).
 
     Returns
     -------
-    N_bins : jnp.ndarray, shape (n_z_bins, n_snr_bins)
-        N_bins[i, j] = number of clusters in:
-            z ∈ [z_bin_edges[i],   z_bin_edges[i+1]),
-            SNR ∈ [snr_bin_edges[j], snr_bin_edges[j+1]),
-        scaled by f_sky (4π already included in get_integrand_number_counts).
+    N2d : (n_z_bins, n_q_bins)
+        N(z_i, q_j) with:
+          z ∈ [z_edges[i], z_edges[i+1])
+          q ∈ [q_edges[j], q_edges[j+1])
+
+    Notes
+    -----
+    Uses the same SNR definition as build_snr_grid() and the same
+    number-count integrand as get_integrand_number_counts() which
+    already includes the 4π full-sky factor.
     """
 
-    if z_bin_edges is None or snr_bin_edges is None:
-        raise ValueError("z_bin_edges and snr_bin_edges must be provided.")
-
-    z_bin_edges = jnp.asarray(z_bin_edges)
-    snr_bin_edges = jnp.asarray(snr_bin_edges)
-
-    # --- reproduce grids used in your tSZ & SNR integrals ---
+    # ------------------------------------------------------------------
+    # 1) Grids (match your base function)
+    # ------------------------------------------------------------------
     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
-    z_min, z_max = allparams['z_min'], allparams['z_max']
-    z_grid = jnp.geomspace(z_min, z_max, 100)              # (n_z,)
+    z_min, z_max = allparams["z_min"], allparams["z_max"]
+    z_grid = jnp.geomspace(z_min, z_max, 100)
 
-    M_min, M_max = allparams['M_min'], allparams['M_max']
-    m_grid = jnp.geomspace(M_min, M_max, 100)              # (n_m,)
+    M_min, M_max = allparams["M_min"], allparams["M_max"]
+    m_grid = jnp.geomspace(M_min, M_max, 100)
     logm_grid = jnp.log(m_grid)
 
     dx_m = logm_grid[1] - logm_grid[0]
     dx_z = z_grid[1] - z_grid[0]
 
-    # --- base integrand: 4π * dV/dz/dΩ * dn/dlnM ---
-    # get_integrand_number_counts returns shape (n_z, n_m, 1)
-    integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)
-    integrand_N = integrand_full[:, :, 0]   # (n_z, n_m), full-sky
+    # ------------------------------------------------------------------
+    # 2) Base integrand: full-sky dN/(dz dlnM)
+    # ------------------------------------------------------------------
+    integrand_N = get_integrand_number_counts(params_values_dict=params_values_dict)  # (n_z, n_m, 1)
+    integrand_N = integrand_N[:, :, 0]  # (n_z, n_m)
 
-    # --- SNR grid on same (z, M) grid ---
+    # ------------------------------------------------------------------
+    # 3) SNR grid on (z_grid, m_grid)
+    # ------------------------------------------------------------------
     snr_grid = build_snr_grid(
         m_grid,
         z_grid,
@@ -596,57 +719,48 @@ def compute_cluster_counts_in_z_snr_bins(
         filter_name=filter_name,
         theta_min=theta_min,
         theta_max=theta_max,
-    )  # shape (n_z, n_m)
+    )  # (n_z, n_m)
 
-    # --- build all bin combinations (z_i, snr_j) ---
-    z_min_edges = z_bin_edges[:-1]
-    z_max_edges = z_bin_edges[1:]
-    q_min_edges = snr_bin_edges[:-1]
-    q_max_edges = snr_bin_edges[1:]
+    # ------------------------------------------------------------------
+    # 4) Build 2D bin counts with top-hat selection in (z, q)
+    # ------------------------------------------------------------------
+    zlo_all = z_edges[:-1]
+    zhi_all = z_edges[1:]
+    qlo_all = q_edges[:-1]
+    qhi_all = q_edges[1:]
 
-    # meshgrid to get all (z_bin, snr_bin) pairs
-    Zmin, Qmin = jnp.meshgrid(z_min_edges, q_min_edges, indexing="ij")
-    Zmax, Qmax = jnp.meshgrid(z_max_edges, q_max_edges, indexing="ij")
+    def count_one_cell(zlo, zhi, qlo, qhi):
+        # z top-hat
+        mask_z = (z_grid >= zlo) & (z_grid < zhi)          # (n_z,)
+        mask_z = mask_z[:, None]                            # (n_z, 1)
 
-    Zmin_flat = Zmin.ravel()
-    Zmax_flat = Zmax.ravel()
-    Qmin_flat = Qmin.ravel()
-    Qmax_flat = Qmax.ravel()
+        # q (=SNR) top-hat
+        mask_q = (snr_grid >= qlo) & (snr_grid < qhi)       # (n_z, n_m)
 
-    def count_one_bin(z_lo, z_hi, q_lo, q_hi):
-        """
-        Integrate over z and lnM with masks:
-          z_lo <= z < z_hi
-          q_lo <= SNR < q_hi
-        """
-        # mask in z
-        mask_z = (z_grid >= z_lo) & (z_grid < z_hi)        # (n_z,)
-        mask_z = mask_z[:, None]                           # (n_z, 1)
+        mask = (mask_z & mask_q).astype(integrand_N.dtype)  # (n_z, n_m)
 
-        # mask in SNR
-        mask_snr = (snr_grid >= q_lo) & (snr_grid < q_hi)  # (n_z, n_m)
-
-        mask = mask_z & mask_snr                           # (n_z, n_m)
-        mask = mask.astype(integrand_N.dtype)
-
-        integrand_bin = integrand_N * mask                 # (n_z, n_m)
+        integrand_cell = integrand_N * mask                 # (n_z, n_m)
 
         # integrate over lnM then z
-        partial_m = simpson(integrand_bin, x=logm_grid, axis=1)  # (n_z,)
-        N_fullsky_bin = simpson(partial_m, x=z_grid, axis=0)     # scalar
+        partial_m = simpson(integrand_cell, x=logm_grid, dx=dx_m, axis=1)  # (n_z,)
+        N_fullsky = simpson(partial_m, x=z_grid, dx=dx_z, axis=0)          # scalar
 
-        return f_sky * N_fullsky_bin
+        return f_sky * N_fullsky
 
-    # vmap over all flattened bin pairs
-    count_vmap = jax.vmap(count_one_bin)
-    N_flat = count_vmap(Zmin_flat, Zmax_flat, Qmin_flat, Qmax_flat)
+    # vmap over all (zbin, qbin) pairs
+    Zlo, Qlo = jnp.meshgrid(zlo_all, qlo_all, indexing="ij")
+    Zhi, Qhi = jnp.meshgrid(zhi_all, qhi_all, indexing="ij")
 
-    # reshape back to (n_z_bins, n_snr_bins)
-    n_z_bins = z_bin_edges.size - 1
-    n_snr_bins = snr_bin_edges.size - 1
-    N_bins = N_flat.reshape((n_z_bins, n_snr_bins))
+    N_flat = jax.vmap(count_one_cell)(
+        Zlo.ravel(), Zhi.ravel(),
+        Qlo.ravel(), Qhi.ravel(),
+    )
 
-    return N_bins
+    n_z_bins = z_edges.size - 1
+    n_q_bins = q_edges.size - 1
+    N2d = N_flat.reshape((n_z_bins, n_q_bins))
+
+    return N2d
 
 
 def compute_tsz_covariance_masked_snr(
@@ -1198,119 +1312,6 @@ def compute_number_detected_clusters_completeness(
     return f_sky * N_fullsky
 
 
-# @partial(jax.jit, static_argnames=("n_grid", "nsig", "n_q_bins", "n_z_bins"))
-# def compute_cluster_counts_in_z_q_bins_completeness(
-#     params_values_dict=None,
-#     *,
-#     sigma_lnY,
-#     # requested defaults
-#     q_min=5.0,
-#     q_max=200.0,
-#     n_q_bins=20,
-#     z_min_bin=0.005,
-#     z_max_bin=3.0,
-#     n_z_bins=20,
-#     f_sky=1.0,
-#     # SNR/noise curve inputs
-#     sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
-#     skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
-#     filter_name="immf6",
-#     theta_min=0.5,
-#     theta_max=32.0,
-#     # completeness integral controls
-#     n_grid=4096,
-#     nsig=16.0,
-# ):
-#     """
-#     Returns:
-#       N_bins: (n_z_bins, n_q_bins)
-#       z_edges: (n_z_bins+1,)
-#       q_edges: (n_q_bins+1,)
-
-#     Here q is the *catalog SNR* threshold variable q_cat.
-#     Bin probability uses the correct ordering since P_det(q_cat) decreases with q_cat:
-#         P(q in [q_lo,q_hi)) = P_det(q_lo) - P_det(q_hi)
-#     """
-
-#     # ---- grids used for the M,z integration ----
-#     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
-#     z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
-#     m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
-#     logm_grid = jnp.log(m_grid)
-
-#     dx_m = logm_grid[1] - logm_grid[0]
-#     dx_z = z_grid[1] - z_grid[0]
-
-#     # ---- base dN/(dz dlnM), full-sky (includes 4π) ----
-#     integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)
-#     dN_dzdlnM = integrand_full[:, :, 0]  # (n_z, n_m)
-
-#     # ---- qbar(M,z) grid ----
-#     qbar_grid = build_snr_grid(
-#         m_grid, z_grid, params_values_dict,
-#         sigma_obj_file=sigma_obj_file,
-#         skyfr_file=skyfr_file,
-#         filter_name=filter_name,
-#         theta_min=theta_min,
-#         theta_max=theta_max,
-#     )
-#     qbar_flat = qbar_grid.reshape(-1)
-
-#     # ---- bin edges (clip z-range to overlap the integration grid) ----
-#     z_lo_eff = jnp.maximum(z_min_bin, z_grid.min())
-#     z_hi_eff = jnp.minimum(z_max_bin, z_grid.max())
-#     z_edges = jnp.linspace(z_lo_eff, z_hi_eff, n_z_bins + 1)
-
-#     q_edges = jnp.linspace(q_min, q_max, n_q_bins + 1)
-
-#     # ---- completeness evaluated at all q_edges ----
-#     def Pdet_at_qedge(qc):
-#         return jax.vmap(
-#             lambda qb: completeness_convolution_jax(qb, sigma_lnY, qc, n_grid=n_grid, nsig=nsig)
-#         )(qbar_flat)
-
-#     Pdet_edges_flat = jax.vmap(Pdet_at_qedge)(q_edges)  # (n_q+1, n_z*n_m)
-#     Pdet_edges = Pdet_edges_flat.reshape((n_q_bins + 1,) + qbar_grid.shape)  # (n_q+1, n_z, n_m)
-
-#     # normalize exactly like your working N_det:
-#     # (your g ranges up to 2, hence the extra factor 2)
-#     norm = 2.0 * jnp.sqrt(2.0 * jnp.pi) * sigma_lnY
-#     Pdet_edges = Pdet_edges / norm
-
-#     # ---- probability mass in each q-bin [q_j, q_{j+1}) ----
-#     # IMPORTANT: Pdet decreases with q_cat, so use Pdet(q_lo) - Pdet(q_hi)
-#     Pbin = Pdet_edges[:-1, :, :] - Pdet_edges[1:, :, :]   # (n_q_bins, n_z, n_m)
-
-#     # numerical safety (should already be >=0, but keep tiny negatives from quadrature)
-#     Pbin = jnp.clip(Pbin, 0.0, 1.0)
-
-#     # ---- z-bin integration ----
-#     zlo = z_edges[:-1]
-#     zhi = z_edges[1:]
-
-#     def one_cell(z_l, z_h, P_q_mz):
-#         mask_z = ((z_grid >= z_l) & (z_grid < z_h))[:, None]  # (n_z, 1)
-#         integrand = dN_dzdlnM * P_q_mz * mask_z               # (n_z, n_m)
-
-#         partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z,)
-#         val = simpson(partial_m, x=z_grid, axis=0)           # scalar
-#         return f_sky * val
-
-#     one_qbin = lambda P_q_mz: jax.vmap(lambda zl, zh: one_cell(zl, zh, P_q_mz))(zlo, zhi)  # (n_z_bins,)
-#     N_bins = jax.vmap(one_qbin)(Pbin)              # (n_q_bins, n_z_bins)
-#     N_bins = jnp.swapaxes(N_bins, 0, 1)            # (n_z_bins, n_q_bins)
-
-#     return N_bins, z_edges, q_edges
-
-
-# Assumes you already have:
-# - classy_sz.get_all_relevant_params
-# - get_integrand_number_counts(params_values_dict=...)
-# - build_snr_grid(m_grid, z_grid, params_values_dict, ...)
-# - completeness_convolution_jax(qbar, sigma_lnY, q_cat, n_grid=..., nsig=...)
-# - simpson(y, x=..., axis=...)
-
-
 @partial(jax.jit, static_argnames=("n_grid", "nsig"))
 def compute_cluster_counts_in_z_q_bins_completeness(
     params_values_dict=None,
@@ -1345,7 +1346,7 @@ def compute_cluster_counts_in_z_q_bins_completeness(
     # m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
     # match cosmocnc-style resolution
     n_z_hmf = int(allparams.get("n_z", 1024))
-    n_m_hmf = int(allparams.get("n_points_data_lik", 50))
+    n_m_hmf = int(allparams.get("n_points_data_lik", 100))
 
     z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], n_z_hmf)
     m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], n_m_hmf)
@@ -1448,212 +1449,115 @@ def compute_cluster_counts_in_z_q_bins_completeness(
     return Nz, Nq
 
 
+@partial(jax.jit, static_argnames=("n_grid", "nsig"))
+def compute_cluster_counts_in_z_q_2d_bins_completeness(
+    params_values_dict=None,
+    *,
+    sigma_lnY,
+    z_edges,          # (n_z_bins+1,)
+    q_edges,          # (n_q_bins+1,)
+    f_sky=1.0,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    n_grid=4096,
+    nsig=16.0,
+):
+    """
+    Returns
+    -------
+    N2d : (n_z_bins, n_q_bins)
+        N(z_i, q_j) in 2D bins:
+          z ∈ [z_edges[i], z_edges[i+1])
+          q ∈ [q_edges[j], q_edges[j+1])
+    """
 
+    # ------------------------------------------------------------------
+    # 1) Theory grid (unchanged)
+    # ------------------------------------------------------------------
+    allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
 
+    # match cosmocnc-style resolution
+    n_z_hmf = int(allparams.get("n_z", 1024))
+    n_m_hmf = int(allparams.get("n_points_data_lik", 50))
 
-## TESTING SO NOISE BELOW:
-# import os
-# import numpy as np
-# import jax
-# import jax.numpy as jnp
-# import jax.scipy.special as jsp
-# from functools import partial
-# # -----------------------------
-# # 0) Load SO noise (theta, sig)
-# # -----------------------------
-# def load_so_mf_noise(
-#     noise_path="/scratch/scratch-lxu/cosmocnc/data/so_sim_sz_mf_noise.npy"
-# ):
-#     if not os.path.exists(noise_path):
-#         raise FileNotFoundError(f"SO noise file not found: {noise_path}")
+    z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], n_z_hmf)
+    m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], n_m_hmf)
 
-#     mf_noise = np.load(noise_path, allow_pickle=True)
+    logm_grid = jnp.log(m_grid)
 
-#     # Expect shape (2, N): [theta, sigma]
-#     theta_rad = np.asarray(mf_noise[0], dtype=float)   # degrees in file
-#     theta  = theta_rad * (180.0 / jnp.pi) * 60.0
+    # --- build dN/(dz dlnM) directly on (z_grid, m_grid) ---
+    def hmf_at_z(z):
+        return get_hmf_at_z_and_m(z=z, m=m_grid, params_values_dict=params_values_dict)
 
-#                           # convert to arcmin
-#     sigma = np.asarray(mf_noise[1], dtype=float)
+    dndlnm = jax.vmap(hmf_at_z)(z_grid)  # (n_z, n_m)
 
+    # dV/dz/dΩ(z)
+    dVdz = dVdzdOmega(z_grid, params_values_dict=params_values_dict)  # (n_z,)
 
-#     if theta.ndim != 1 or sigma.ndim != 1 or theta.size != sigma.size:
-#         raise ValueError(f"Unexpected mf_noise arrays: theta {theta.shape}, sigma {sigma.shape}")
+    # full-sky factor included (4π)
+    dN_dzdlnM = 4.0 * jnp.pi * dndlnm * dVdz[:, None]  # (n_z, n_m)
 
-#     # sort if needed
-#     if not np.all(np.diff(theta) > 0):
-#         idx = np.argsort(theta)
-#         theta = theta[idx]
-#         sigma = sigma[idx]
+    # ------------------------------------------------------------------
+    # 2) q̄(M,z)
+    # ------------------------------------------------------------------
+    qbar_grid = build_snr_grid(
+        m_grid, z_grid, params_values_dict,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )
+    qbar_flat = qbar_grid.reshape(-1)
 
-#     # sanity: positive
-#     if np.any(theta <= 0) or np.any(sigma <= 0):
-#         raise ValueError("SO noise curve contains non-positive theta or sigma values.")
+    # ------------------------------------------------------------------
+    # 3) Completeness function P_det(q_cat)
+    # ------------------------------------------------------------------
+    norm = 2.0 * jnp.sqrt(2.0 * jnp.pi) * sigma_lnY
 
-#     return theta, sigma
+    def Pdet(qc):
+        raw = jax.vmap(
+            lambda qb: completeness_convolution_jax(
+                qb, sigma_lnY, qc, n_grid=n_grid, nsig=nsig
+            )
+        )(qbar_flat)
+        return (raw / norm).reshape(qbar_grid.shape)  # (n_z, n_m)
 
+    # ------------------------------------------------------------------
+    # 4) Build per-q-bin probability mass P(q in [q_lo, q_hi))
+    # ------------------------------------------------------------------
+    q_lo_all = q_edges[:-1]
+    q_hi_all = q_edges[1:]
 
-# # -------------------------------------------------
-# # 1) JAX log-log interpolation with linear extrapol
-# # -------------------------------------------------
-# @jax.jit
-# def _interp_lin_extrap_1d(xg, yg, xq):
-#     i = jnp.searchsorted(xg, xq, side="right") - 1
-#     i = jnp.clip(i, 0, xg.size - 2)
-#     x0 = xg[i]
-#     x1 = xg[i + 1]
-#     y0 = yg[i]
-#     y1 = yg[i + 1]
-#     t = (xq - x0) / (x1 - x0)
-#     return y0 + t * (y1 - y0)
+    def Pbin_from_edges(q_lo, q_hi):
+        Pdet_lo = Pdet(q_lo)
+        Pdet_hi = Pdet(q_hi)
+        return jnp.clip(Pdet_lo - Pdet_hi, 0.0, 1.0)  # (n_z, n_m)
 
+    Pbin_all = jax.vmap(Pbin_from_edges)(q_lo_all, q_hi_all)  # (n_q_bins, n_z, n_m)
 
-# def make_sigma_y0_from_theta500_so(theta_arcmin_np, sigma_np):
-#     """
-#     Return a JIT-able function sigma_y0(theta500_arcmin) built from the SO curve,
-#     using log-log interpolation and linear extrapolation at the ends.
-#     """
-#     eps = 1e-30
-#     theta_g = jnp.asarray(theta_arcmin_np)
-#     sig_g = jnp.asarray(sigma_np)
+    # ------------------------------------------------------------------
+    # 5) Integrate into 2D (z,q) bins -> N2d
+    # ------------------------------------------------------------------
+    zlo_all = z_edges[:-1]
+    zhi_all = z_edges[1:]
 
-#     log_theta_g = jnp.log(jnp.clip(theta_g, eps, None))
-#     log_sig_g = jnp.log(jnp.clip(sig_g, eps, None))
+    def count_one_z_bin(zlo, zhi, Pbin_q):  # Pbin_q: (n_z, n_m)
+        mask_z = (z_grid >= zlo) & (z_grid < zhi)          # (n_z,)
+        Iz = simpson(
+            dN_dzdlnM * Pbin_q * mask_z[:, None],
+            x=logm_grid,
+            axis=1,
+        )  # (n_z,)
+        return f_sky * simpson(Iz, x=z_grid)               # scalar
 
-#     @jax.jit
-#     def sigma_y0(theta500_arcmin):
-#         xq = jnp.log(jnp.clip(theta500_arcmin, eps, None))
-#         log_sig_q = _interp_lin_extrap_1d(log_theta_g, log_sig_g, xq)
-#         return jnp.exp(log_sig_q)
+    def count_one_q_bin(Pbin_q):  # (n_z, n_m) -> (n_z_bins,)
+        return jax.vmap(lambda zlo, zhi: count_one_z_bin(zlo, zhi, Pbin_q))(zlo_all, zhi_all)
 
-#     return sigma_y0
+    N_qz = jax.vmap(count_one_q_bin)(Pbin_all)  # (n_q_bins, n_z_bins)
+    N2d = jnp.swapaxes(N_qz, 0, 1)              # (n_z_bins, n_q_bins)
 
-
-# # ---------------------------------------------------------
-# # 2) Two-layer detection probability (intrinsic + meas. noise)
-# # ---------------------------------------------------------
-# @partial(jax.jit, static_argnames=("n_grid", "nsig"))
-# def pdet_two_layer(
-#     q_bar,          # mean "matched-filter" SNR (y0/sigma_y0(theta500))
-#     sigma_lnY,      # intrinsic scatter in ln q_m
-#     q_cat,          # catalog threshold on observed SNR
-#     *,
-#     n_grid=4096,
-#     nsig=16.0,
-# ):
-#     """
-#     Model:
-#       ln q_m ~ Normal(ln q_bar, sigma_lnY^2)      (intrinsic)
-#       q_obs = q_m + N(0,1)                        (measurement; unit variance)
-#     Then:
-#       P_det = ∫ d ln q_m  N(ln q_m; ln q_bar, sigma_lnY^2) * P(q_obs > q_cat | q_m)
-#            = ∫ d ln q_m  N(...) * 0.5*erfc((q_cat - q_m)/sqrt(2))
-#     """
-#     q_bar = jnp.maximum(q_bar, 1e-30)
-#     sigma_lnY = jnp.maximum(sigma_lnY, 1e-12)
-
-#     mu = jnp.log(q_bar)
-#     t0 = mu - nsig * sigma_lnY
-#     t1 = mu + nsig * sigma_lnY
-
-#     t = jnp.linspace(t0, t1, n_grid)    # t = ln q_m
-#     q_m = jnp.exp(t)
-
-#     gauss = jnp.exp(-0.5 * ((t - mu) / sigma_lnY) ** 2) / (jnp.sqrt(2.0 * jnp.pi) * sigma_lnY)
-
-#     tail = 0.5 * jsp.erfc((q_cat - q_m) / jnp.sqrt(2.0))
-
-#     return jnp.trapezoid(gauss * tail, x=t)
-
-
-# # --------------------------------------------
-# # 3) Build qbar(M,z) grid using SO sigma(theta)
-# # --------------------------------------------
-# def build_qbar_grid_so_noise(
-#     m_grid, z_grid, params_values_dict,
-#     *,
-#     noise_path="/scratch/scratch-lxu/cosmocnc/data/so_sim_sz_mf_noise.npy",
-# ):
-#     """
-#     Returns qbar_grid(z,m) = y0(M,z)/sigma_y0_SO(theta500(M,z))
-#     shape (n_z, n_m)
-#     """
-#     theta_np, sigma_np = load_so_mf_noise(noise_path=noise_path)
-#     sigma_y0_from_theta500 = make_sigma_y0_from_theta500_so(theta_np, sigma_np)
-
-#     @jax.jit
-#     def qbar_one(m, z):
-#         y0 = compute_y0(m, z, params_values_dict=params_values_dict)
-#         th = compute_theta500_arcmin(m, z, params_values_dict=params_values_dict)
-#         sig = sigma_y0_from_theta500(th)
-#         return y0 / sig
-
-#     def qbar_at_z(z):
-#         return jax.vmap(lambda m: qbar_one(m, z))(m_grid)  # (n_m,)
-
-#     return jax.vmap(qbar_at_z)(z_grid)  # (n_z, n_m)
-
-
-# # -------------------------------------------------------
-# # 4) Main test: N_det with SO noise + two-layer scattering
-# # -------------------------------------------------------
-# def test_number_detected_clusters_so_noise(
-#     params_values_dict=None,
-#     *,
-#     q_cat=5.0,
-#     sigma_lnY=0.2,
-#     f_sky=0.4,
-#     n_m=100,
-#     n_z=100,
-#     n_grid=4096,
-#     nsig=16.0,
-#     noise_path="/scratch/scratch-lxu/cosmocnc/data/so_sim_sz_mf_noise.npy",
-# ):
-#     """
-#     Computes:
-#       N_det = f_sky * ∫ dz ∫ dlnM [dN/(dz dlnM)] * P_det(M,z)
-#     with P_det from pdet_two_layer, and q_bar from SO noise curve.
-
-#     Prints diagnostics and returns N_det (DeviceArray scalar).
-#     """
-#     # --- grids (match your package conventions) ---
-#     allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
-#     z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], n_z)
-#     m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], n_m)
-#     logm_grid = jnp.log(m_grid)
-
-#     # --- full-sky dN/(dz dlnM) from your code (includes 4π already) ---
-#     integrand_full = get_integrand_number_counts(params_values_dict=params_values_dict)  # (n_z, n_m, 1)
-#     dN_dzdlnM = integrand_full[:, :, 0]  # (n_z, n_m)
-
-#     # --- q_bar grid using SO noise curve ---
-#     qbar_grid = build_qbar_grid_so_noise(
-#         m_grid, z_grid, params_values_dict,
-#         noise_path=noise_path,
-#     )  # (n_z, n_m)
-
-#     # --- P_det grid ---
-#     qbar_flat = qbar_grid.reshape(-1)
-#     Pdet_flat = jax.vmap(lambda qb: pdet_two_layer(qb, sigma_lnY, q_cat, n_grid=n_grid, nsig=nsig))(qbar_flat)
-#     Pdet = Pdet_flat.reshape(qbar_grid.shape)
-
-#     # --- integrate over lnM and z (Simpson) ---
-#     weighted = dN_dzdlnM * Pdet
-#     partial_m = simpson(weighted, x=logm_grid, axis=1)  # (n_z,)
-#     N_fullsky = simpson(partial_m, x=z_grid, axis=0)    # scalar
-
-#     N_det = f_sky * N_fullsky
-
-#     # --- diagnostics ---
-#     # (materialize a few scalars for printing)
-#     qmin = float(jnp.min(qbar_grid))
-#     qmax = float(jnp.max(qbar_grid))
-#     pmin = float(jnp.min(Pdet))
-#     pmax = float(jnp.max(Pdet))
-#     print("SO noise path:", noise_path)
-#     print(f"q_cat={q_cat}, sigma_lnY={sigma_lnY}, f_sky={f_sky}")
-#     print(f"qbar_grid range: [{qmin:.3e}, {qmax:.3e}]")
-#     print(f"Pdet range:      [{pmin:.3e}, {pmax:.3e}]")
-#     print("N_det =", float(N_det))
-
-#     return N_det
+    return N2d #dim = (n_z_bins, n_q_bins)

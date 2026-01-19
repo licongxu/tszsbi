@@ -60,8 +60,10 @@ class tSZ_CNC_Likelihood(Likelihood):
 
         # Flatten in the SAME way as your example:
         # H_vec = H.flatten()  # row-major order (C-order)
-        self.N_obs_vec = H_data.flatten()
-        self.n_bins = self.N_obs_vec.size
+        self.N_obs_2d = H_data
+        self.data_shape = H_data.shape
+        self.n_bins = H_data.size  # optional, just for logging
+
 
         self.log.info(
             f"tSZ_CNC_Likelihood: loaded data from {data_path}, "
@@ -77,7 +79,8 @@ class tSZ_CNC_Likelihood(Likelihood):
         The theory module should provide 'N_cnc' as a 1D vector of
         length matching self.N_obs_vec.
         """
-        return {"N_cnc": {}}
+        return {"N2d_cnc": {}}
+
 
     # ------------------------------------------------------------------
     # Poisson log-likelihood
@@ -100,26 +103,25 @@ class tSZ_CNC_Likelihood(Likelihood):
         To avoid log(0), we impose a small floor on lambda_i.
         """
         # 1) Get theory prediction from provider
-        N_th_vec = self.provider.get_N_cnc()
-        N_th_vec = np.asarray(N_th_vec, dtype=float)
+        N_th_2d = self.provider.get_N2d_cnc()
+        N_th_2d = np.asarray(N_th_2d, dtype=float)
 
-        if N_th_vec.shape != self.N_obs_vec.shape:
+        if N_th_2d.shape != self.N_obs_2d.shape:
             raise ValueError(
-                f"Shape mismatch between theory N_cnc {N_th_vec.shape} "
-                f"and data counts {self.N_obs_vec.shape}"
+                f"Shape mismatch between theory N2d_cnc {N_th_2d.shape} "
+                f"and data counts {self.N_obs_2d.shape}"
             )
 
-        # 2) Apply floor to avoid log(0) and negative predictions
-        lam = np.maximum(N_th_vec, self.lambda_floor)
+        lam = np.maximum(N_th_2d, self.lambda_floor)
 
-        # 3) Poisson log-likelihood (dropping ln(N_obs!))
-        N_obs = self.N_obs_vec
+        N_obs = self.N_obs_2d
         logL = np.sum(N_obs * np.log(lam) - lam)
+
 
         # Optional: report simple diagnostics
         self.log.info(
             "tSZ_CNC_Likelihood: sum(N_obs) = %.3f, sum(N_th) = %.3f, loglike = %.3f",
-            N_obs.sum(), N_th_vec.sum(), logL,
+            N_obs.sum(), N_th_2d.sum(), logL,
         )
 
         return logL

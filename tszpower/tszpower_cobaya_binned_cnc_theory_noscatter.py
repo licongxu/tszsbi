@@ -14,7 +14,7 @@ import time
 from .config import classy_sz
 from .initialise import initialise
 # Adjust this import to wherever you defined the function:
-from .maskedpower import compute_cluster_counts_in_z_snr_bins
+from .maskedpower import compute_cluster_counts_in_z_q_2d_bins_tophat
 
 
 class tSZ_CNC_Theory(Theory):
@@ -27,7 +27,7 @@ class tSZ_CNC_Theory(Theory):
     """
 
     # Name of the output this theory provides
-    output = ["N_cnc"]
+    output = ["N2d_cnc"]
 
     # Free (sampled) cosmological parameters (same as your PS theory)
     params = {
@@ -47,13 +47,13 @@ class tSZ_CNC_Theory(Theory):
     f_sky: float = 1.0
 
     # Binning configuration
-    n_z_bins: int = 5
-    z_min: float = 0.005
-    z_max: float = 3.0
+    n_z_bins: int = 10
+    z_min: float = 0.
+    z_max: float = 1.0
 
     n_snr_bins: int = 5
     snr_min: float = 5.0
-    snr_max: float = 50.0
+    snr_max: float = 40.0
 
     # ------------------------------------------------------------------
     # Cobaya interface methods
@@ -83,7 +83,7 @@ class tSZ_CNC_Theory(Theory):
         self.fixed_params = {
             "M_min": 1e14 * 0.6766,
             "M_max": 1e16 * 0.6766,
-            "z_min": self.z_min,
+            "z_min": max(self.z_min, 1e-6),
             "z_max": self.z_max,
             "P0GNFW": 8.130,
             "c500": 1.156,
@@ -114,10 +114,9 @@ class tSZ_CNC_Theory(Theory):
 
         # Precompute bin edges (can be overridden via YAML attributes)
         self.z_bin_edges = np.linspace(self.z_min, self.z_max, self.n_z_bins + 1)
-        ln_snr_edges = np.linspace(np.log(self.snr_min),
-                                   np.log(self.snr_max),
-                                   self.n_snr_bins + 1)
-        self.snr_bin_edges = np.exp(ln_snr_edges)
+        self.snr_bin_edges = np.geomspace(self.snr_min, self.snr_max, self.n_snr_bins + 1)
+
+
 
         # Prepare container for current state
         self._current_state = {}
@@ -145,32 +144,21 @@ class tSZ_CNC_Theory(Theory):
         updated_pars.update(self.fixed_params)
 
         # Compute binned cluster counts N_bins(z_i, snr_j)
-        N_bins = compute_cluster_counts_in_z_snr_bins(
+        N2d = compute_cluster_counts_in_z_q_2d_bins_tophat(
             params_values_dict=updated_pars,
-            z_bin_edges=self.z_bin_edges,
-            snr_bin_edges=self.snr_bin_edges,
+            z_edges=self.z_bin_edges,
+            q_edges=self.snr_bin_edges,
             f_sky=self.f_sky,
-        )  # expected shape: (n_z_bins, n_snr_bins) as jax array
+        )  # shape (n_z_bins, n_snr_bins)
 
-        # Convert to numpy and flatten with the SAME convention as np.histogram2d
-        # H, *_ = np.histogram2d(x, y, ...) → H has shape (n_x_bins, n_y_bins)
-        # When you used x = ln(SNR), y = z, you flattened H directly:
-        # H_vec = H.flatten()
-        #
-        # Your theoretical N_bins is (n_z_bins, n_snr_bins), with axis0=z, axis1=SNR.
-        # To match the histogram convention, transpose first:
-        N_vec = np.asarray(N_bins.T).flatten()  # shape: (n_z_bins * n_snr_bins,)
+        state["N2d_cnc"] = np.asarray(N2d)  # keep as 2D array
 
-        # Store in state under the advertised output name
-        state["N_cnc"] = N_vec
         self._current_state = state
 
         self.log.info(
             "CNC (cluster counts) computed in {:.4f} seconds".format(time.time() - t0)
         )
 
-    def get_N_cnc(self):
-        """
-        Accessor used by Cobaya to retrieve the theory output.
-        """
-        return self._current_state.get("N_cnc", None)
+    def get_N2d_cnc(self):
+        return self._current_state.get("N2d_cnc", None)
+
