@@ -12,4 +12,6 @@ from .tsz_sbi_inference import *
 from .sbi_utils import *
 from .sbi_builder import *
 from .maskedpower import *
+from .masked_tsz_ps_completeness import *
+from .parametric_profile import *
 # from .tsz_sbi import *

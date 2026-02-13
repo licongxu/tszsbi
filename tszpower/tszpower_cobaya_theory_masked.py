@@ -8,12 +8,14 @@ foreground residuals.
 from cobaya.theory import Theory
 # import tszpower
 from .config import classy_sz
-from .maskedpower import compute_Dell_snr_simple_uRC
+from .maskedpower import ELL_EFF, compute_Dell_snr_simple_uRC, compute_integral_snr_simple_uRC_binned
 from .initialise import initialise
 from .utils import get_ell_range
 import numpy as np
+import jax.numpy as jnp
 import time
 import os
+from scipy.interpolate import interp1d
 
 ###########################################################################
 # tSZ Power Spectrum Theory Module
@@ -97,7 +99,13 @@ class tSZ_PS_Theory(Theory):
         
         # Retrieve the multipole array and compute the tSZ power spectrum.
         # ell = get_ell_range()
-        dl_total = compute_Dell_snr_simple_uRC(params_values_dict=updated_pars, q_obs=5.0)
+        # dl_total = compute_Dell_snr_simple_uRC(params_values_dict=updated_pars, q_obs=5.0)
+
+        ELL_EFF = jnp.array([ 10.0, 13.5, 18.0, 23.5, 30.5, 40.0, 52.5, 68.5, 89.5,
+                      117.0,152.5,198.0,257.5,335.5,436.5,567.5,738.0,959.5 ], dtype=jnp.float32)
+        # c_ell_uRC_theory = compute_integral_snr_simple_uRC_binned(params_values_dict=updated_pars, q_obs=5.0)
+        # dl_total = ELL_EFF * (ELL_EFF + 1.0) / (2.0 * np.pi) * c_ell_uRC_theory * 1e12  
+        dl_total = compute_integral_snr_simple_uRC_binned(params_values_dict=updated_pars, q_obs=5.0)
 
         # For this example, assume the entire signal is from the 1-halo term.
         cl_1h = dl_total
@@ -111,8 +119,6 @@ class tSZ_PS_Theory(Theory):
 
     def get_Cl_sz(self):
         return self._current_state.get("Cl_sz", None)
-
-
 
 class tSZ_FG_Theory(Theory):
     output = ["Cl_sz_foreground"]
@@ -144,6 +150,32 @@ class tSZ_FG_Theory(Theory):
         self.A_RS_MODEL  = D_fg[:, 2]
         self.A_IR_MODEL  = D_fg[:, 3]
         self.A_CN_MODEL  = D_fg[:, 4]
+        # Target ell grid used everywhere else (same grid as the likelihood/model)
+        # Assumption: your likelihood expects D_ell on get_ell_range().
+        # self.ell_model = get_ell_range()
+        self.ell_model = ELL_EFF
+
+        # Interpolate templates (defined on self.fg_ell) onto ell_model.
+        # Use log-log for positive templates for stability; fall back to linear if needed.
+        def _loglog_interp(x, y):
+            # guard: y must be strictly positive for log interpolation
+            y_clip = np.clip(y, 1e-300, None)
+            f = interp1d(np.log(x), np.log(y_clip), kind="linear",
+                         bounds_error=False, fill_value=-np.inf)
+            return np.exp(f(np.log(self.ell_model)))
+
+        # Build interpolated templates on ell_model (D_ell units preserved)
+        self.A_CIB_on_model = _loglog_interp(self.fg_ell, self.A_CIB_MODEL)
+        self.A_RS_on_model  = _loglog_interp(self.fg_ell, self.A_RS_MODEL)
+        self.A_IR_on_model  = _loglog_interp(self.fg_ell, self.A_IR_MODEL)
+
+        # Ensure anything out of range becomes exactly 0 (exp(-inf)=0 already, but keep robust)
+        for name in ["A_CIB_on_model", "A_RS_on_model", "A_IR_on_model"]:
+            arr = getattr(self, name)
+            arr[~np.isfinite(arr)] = 0.0
+            setattr(self, name, arr)
+
+
         self._current_state = {}
 
     def calculate(self, state, want_derived=False, **params_values):
@@ -154,10 +186,66 @@ class tSZ_FG_Theory(Theory):
         # A_CN is fixed (from external calibration)
         A_cn = 0.9033
         # Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL + A_cn * self.A_CN_MODEL
-        Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL
-        state["Cl_sz_foreground"] = Cl_fg
+        # Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL
+        # state["Cl_sz_foreground"] = Cl_fg
+        D_ell_fg = (
+            A_cib * self.A_CIB_on_model
+            + A_rs * self.A_RS_on_model
+            + A_ir * self.A_IR_on_model
+        )
+        state["Cl_sz_foreground"] = D_ell_fg
+
         self._current_state = state
         self.log.info("SZ foreground computed.")
 
     def get_Cl_sz_foreground(self):
         return self._current_state.get("Cl_sz_foreground", None)
+
+
+# class tSZ_FG_Theory(Theory):
+#     output = ["Cl_sz_foreground"]
+
+#     # Declare free nuisance parameters (foreground amplitudes)
+#     # --- Free nuisance (foreground) parameters ---
+#     # A_sz: float            # overall amplitude for the tSZ power spectrum
+#     # A_cib: float           # amplitude for the CIB foreground template
+#     # A_ir: float            # amplitude for the infrared foreground template
+#     # A_rs: float            # amplitude for the radio source foreground template
+
+#     # Explicitly register nuisance parameters with Cobaya:
+#     params = {"A_cib": 0, "A_ir": 0, "A_rs": 0}
+
+
+#     # Data file for the foreground template; using package resource filename.
+#     foreground_data_directory: str = "data"
+#     foreground_data_file: str = "data_fg-ell-cib_rs_ir_cn-total-planck-collab-15.txt"
+
+#     def initialize(self):
+#         self.log.info("SZForegroundTheory initialized (foreground part).")
+#         fg_path = os.path.join(self.foreground_data_directory, self.foreground_data_file)
+#         if not os.path.exists(fg_path):
+#             raise RuntimeError("Foreground template file not found: " + fg_path)
+#         D_fg = np.loadtxt(fg_path)
+#         # Expected columns: ell, CIB template, RS template, IR template, CN template.
+#         self.fg_ell = D_fg[:, 0]
+#         self.A_CIB_MODEL = D_fg[:, 1]
+#         self.A_RS_MODEL  = D_fg[:, 2]
+#         self.A_IR_MODEL  = D_fg[:, 3]
+#         self.A_CN_MODEL  = D_fg[:, 4]
+#         self._current_state = {}
+
+#     def calculate(self, state, want_derived=False, **params_values):
+#         # Retrieve free parameters
+#         A_cib = params_values["A_cib"]
+#         A_rs = params_values["A_rs"]
+#         A_ir = params_values["A_ir"]
+#         # A_CN is fixed (from external calibration)
+#         A_cn = 0.9033
+#         # Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL + A_cn * self.A_CN_MODEL
+#         Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL
+#         state["Cl_sz_foreground"] = Cl_fg
+#         self._current_state = state
+#         self.log.info("SZ foreground computed.")
+
+#     def get_Cl_sz_foreground(self):
+#         return self._current_state.get("Cl_sz_foreground", None)

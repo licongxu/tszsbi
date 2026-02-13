@@ -9,6 +9,13 @@ from .utils import get_ell_range, simpson, get_ell_binwidth
 import time
 from jax import lax
 
+ELL_MIN = jnp.array([  9,  12,  16,  21,  27,  35,  46,  60,  78,
+                      102, 133, 173, 224, 292, 380, 494, 642, 835 ], dtype=jnp.float32)
+ELL_MAX = jnp.array([ 12,  16,  21,  27,  35,  46,  60,  78, 102,
+                      133, 173, 224, 292, 380, 494, 642, 835,1085 ], dtype=jnp.float32)
+ELL_EFF = jnp.array([ 10.0, 13.5, 18.0, 23.5, 30.5, 40.0, 52.5, 68.5, 89.5,
+                      117.0,152.5,198.0,257.5,335.5,436.5,567.5,738.0,959.5 ], dtype=jnp.float32)
+
 def dVdzdOmega(z, params_values_dict = None):
 
     rparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
@@ -123,24 +130,6 @@ def compute_integral(params_values_dict = None):
     # ell = y_ell_complete(z=1, m=m_grid, params_values_dict = cosmo_params)[0]
     # This will store the integrated value for each ell
     C_yy = jnp.zeros(len(ell))
-    # end_time = time.time()
-    # print(f"intermediate 1 took {end_time - start_time:.4f} seconds")
-    # start_time = time.time()
-    # for i in range(len(ell)):
-    #     # 1) Integrate over m
-    #     #    integrand[:, :, i] has shape (dim_z, dim_m)
-    #     partial_m = simpson(integrand[:, :, i], x=logm_grid, dx=(logm_grid[1]-logm_grid[0]),axis=1)
-    #     # partial_m = jnp.trapezoid(integrand[:, :, i], x=logm_grid, dx=(logm_grid[1]-logm_grid[0]),axis=1)
-    #     # partial_m = simpson(integrand[:, :, i], x=m_grid, axis=1)
-    #     # partial_m now has shape (dim_z,)
-
-    #     # 2) Integrate the result over z
-    #     result = simpson(partial_m, x=z_grid, dx = (z_grid[1]-z_grid[0]), axis=0)
-    #     # result = jnp.trapezoid(partial_m, x=z_grid, dx = (z_grid[1]-z_grid[0]), axis=0)
-
-    #     # Store the result for this ell
-    #     C_yy = C_yy.at[i].set(result)
-    # end_time = time.time()
     # print(f"intermediate 2 took {end_time - start_time:.4f} seconds")
 
     # Define a scan body function that, for a given index i, computes the integrated value.
@@ -160,24 +149,85 @@ def compute_integral(params_values_dict = None):
     # Use lax.scan over the indices 0,1,..., n_ell-1.
     # The carry value is not used here (set to None).
     _, C_yy = lax.scan(scan_body, None, jnp.arange(n_ell))
-    # C_yy is an array of shape (n_ell,)
-    # for i in range(len(ell)):
-    #     # 1) Integrate over m
-    #     #    integrand[:, :, i] has shape (dim_z, dim_m)
-    #     partial_m = simpson(integrand[:, :, i], x=logm_grid, dx=(logm_grid[1]-logm_grid[0]),axis=1)
-    #     # partial_m = jnp.trapezoid(integrand[:, :, i], x=logm_grid, dx=(logm_grid[1]-logm_grid[0]),axis=1)
-    #     # partial_m = simpson(integrand[:, :, i], x=m_grid, axis=1)
-    #     # partial_m now has shape (dim_z,)
-
-    #     # 2) Integrate the result over z
-    #     result = simpson(partial_m, x=z_grid, dx = (z_grid[1]-z_grid[0]), axis=0)
-    #     # result = jnp.trapezoid(partial_m, x=z_grid, dx = (z_grid[1]-z_grid[0]), axis=0)
-
-    #     # Store the result for this ell
-    #     C_yy = C_yy.at[i].set(result)
             
     return C_yy  
 
+
+@jax.jit
+def compute_integral_binned(params_values_dict = None):
+
+    allparams = classy_sz.get_all_relevant_params(params_values_dict = params_values_dict)
+    integrand = get_integral_grid(params_values_dict = params_values_dict) # shape is (dim_z, dim_m, dim_ell) 
+
+    z_min = allparams['z_min']
+    z_max = allparams['z_max']
+    z_grid = jnp.geomspace(z_min, z_max, 100)
+
+    # Define an m_grid:
+    M_min = allparams['M_min']
+    M_max = allparams['M_max']
+    m_grid = jnp.geomspace(M_min,M_max,100)
+    logm_grid = jnp.log(m_grid)
+
+    # Calculate the spacings (assumed uniform in log-space and z)
+    dx_m = logm_grid[1] - logm_grid[0]
+    dx_z = z_grid[1] - z_grid[0]
+
+    # Get the ell array (should be a JAX array)
+    ell = get_ell_range()  # shape (n_ell,)
+    n_ell = ell.shape[0]
+    # ell = y_ell_complete(z=1, m=m_grid, params_values_dict = cosmo_params)[0]
+    # This will store the integrated value for each ell
+    C_yy = jnp.zeros(len(ell))
+    # print(f"intermediate 2 took {end_time - start_time:.4f} seconds")
+
+    # Define a scan body function that, for a given index i, computes the integrated value.
+    def scan_body(_, i):
+        # For the i-th ell value, extract the corresponding slice of the integrand:
+        #   integrand_i has shape (n_z, n_m)
+        integrand_i = integrand[:, :, i]
+        
+        # First integrate over m (using your Simpson routine along axis=1)
+        partial_m = simpson(integrand_i, x=logm_grid, dx=dx_m, axis=1)  # shape (n_z,)
+        
+        # Then integrate the result over z (along axis=0)
+        result = simpson(partial_m, x=z_grid, dx=dx_z, axis=0)  # scalar
+        
+        return None, result
+
+    # Use lax.scan over the indices 0,1,..., n_ell-1.
+    # The carry value is not used here (set to None).
+    _, C_yy = lax.scan(scan_body, None, jnp.arange(n_ell))
+
+    def interp1d_jax(x, y, xnew):
+        # x must be increasing
+        idx = jnp.searchsorted(x, xnew, side="right") - 1
+        idx = jnp.clip(idx, 0, x.shape[0] - 2)
+        x0 = x[idx];   x1 = x[idx + 1]
+        y0 = y[idx];   y1 = y[idx + 1]
+        t = (xnew - x0) / (x1 - x0)
+        return y0 + t * (y1 - y0)
+    
+    # ell: (n_ell_compute,), C_yy: (n_ell_compute,)
+
+    # optional: interpolate in log-ell for smoother behavior across decades
+    log_ell = jnp.log(ell)
+    def Cyy_of_ell(ell_query):
+        return interp1d_jax(log_ell, C_yy, jnp.log(ell_query))
+
+    # choose how many sub-samples per bin (trade accuracy vs speed)
+    Nsub = 16
+
+    def bin_one(ell_lo, ell_hi):
+        # integrate/average in log-ell (common for power spectra)
+        x = jnp.linspace(jnp.log(ell_lo), jnp.log(ell_hi), Nsub)
+        ell_sub = jnp.exp(x)
+        c_sub = Cyy_of_ell(ell_sub)
+        # return mean over the bin in log-ell measure (equally spaced in log-ell)
+        return jnp.mean(c_sub)
+
+    C_yy_binned = jax.vmap(bin_one)(ELL_MIN, ELL_MAX)  # (18,)
+    return C_yy_binned
 
 def get_integral_grid_trisp(params_values_dict=None):
 

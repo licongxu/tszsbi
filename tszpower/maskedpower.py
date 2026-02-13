@@ -10,6 +10,61 @@ from .massfuncs import get_hmf_at_z_and_m
 from .utils import get_ell_range, simpson, get_ell_binwidth
 import jax.scipy.special as jsp
 from functools import partial
+ELL_MIN = jnp.array([  9,  12,  16,  21,  27,  35,  46,  60,  78,
+                      102, 133, 173, 224, 292, 380, 494, 642, 835 ], dtype=jnp.float32)
+ELL_MAX = jnp.array([ 12,  16,  21,  27,  35,  46,  60,  78, 102,
+                      133, 173, 224, 292, 380, 494, 642, 835,1085 ], dtype=jnp.float32)
+ELL_EFF = jnp.array([ 10.0, 13.5, 18.0, 23.5, 30.5, 40.0, 52.5, 68.5, 89.5,
+                      117.0,152.5,198.0,257.5,335.5,436.5,567.5,738.0,959.5 ], dtype=jnp.float32)
+
+# --- precompute integer-ell grids (fixed shapes for JIT) ---
+ELL_MIN_I = ELL_MIN.astype(jnp.int32)
+ELL_MAX_I = ELL_MAX.astype(jnp.int32)
+_bin_lengths = (ELL_MAX_I - ELL_MIN_I + 1)          # inclusive
+L_MAX = int(jnp.max(_bin_lengths))
+
+ELL_INT  = ELL_MIN_I[:, None] + jnp.arange(L_MAX)[None, :]     # (18, L_MAX)
+ELL_MASK = (ELL_INT <= ELL_MAX_I[:, None]).astype(jnp.float32) # (18, L_MAX)
+
+@partial(jax.jit, static_argnames=("scale_1e12",))
+def bin_Dl_to_18(ell_in, Cl_in, *, scale_1e12=True):
+    """
+    Bin to 18 values by:
+      1) interpolate C_ell onto every integer ell within each [ELL_MIN, ELL_MAX],
+      2) compute D_ell = ell(ell+1) C_ell / (2π) * (1e12 if requested),
+      3) average D_ell uniformly over integer ell in the bin.
+
+    Returns: (18,)
+    """
+    ell_in = jnp.asarray(ell_in)
+    Cl_in  = jnp.asarray(Cl_in)
+
+    # log-ell axis for interpolation
+    log_ell_in = jnp.log(ell_in)
+
+    def interp1d_jax(x, y, xnew):
+        idx = jnp.searchsorted(x, xnew, side="right") - 1
+        idx = jnp.clip(idx, 0, x.shape[0] - 2)
+        x0 = x[idx];   x1 = x[idx + 1]
+        y0 = y[idx];   y1 = y[idx + 1]
+        t = (xnew - x0) / (x1 - x0)
+        return y0 + t * (y1 - y0)
+
+    def Cl_of_ell(ell_q):
+        return interp1d_jax(log_ell_in, Cl_in, jnp.log(ell_q))
+
+    # evaluate C_ell on every integer ell in each bin
+    ell_q = ELL_INT.astype(ell_in.dtype)     # (18, L_MAX)
+    Cl_q  = Cl_of_ell(ell_q)                 # (18, L_MAX)
+
+    # convert to D_ell on that integer grid
+    Dl_q = ell_q * (ell_q + 1.0) * Cl_q / (2.0 * jnp.pi)
+    Dl_q = Dl_q * (1e12 if scale_1e12 else 1.0)
+
+    # uniform average over the integer ell samples that are inside the bin
+    num = jnp.sum(Dl_q * ELL_MASK, axis=1)   # (18,)
+    den = jnp.sum(ELL_MASK, axis=1)          # (18,)
+    return num / den
 
 
 def compute_y0(M, z, params_values_dict=None):
@@ -422,6 +477,203 @@ def compute_integral_snr_simple_uRC(
     C_yy = _integrate_mz(integrand, z_grid, logm_grid)
     return C_yy
 
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "Nsub",
+    ),
+)
+def compute_integral_snr_simple_uRC_binned(
+    params_values_dict=None,
+    *,
+    q_obs=None,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    Nsub=16,   # number of log-ell samples per bin
+):
+    """
+    Compute binned C_ell (18-dim) for the UNRESOLVED (uRC) tSZ map,
+    using the fixed bins [ELL_MIN, ELL_MAX] and the shared binning operator
+    bin_Cl_to_18(ell, Cl).
+
+    Returns
+    -------
+    C_yy_binned : jnp.ndarray, shape (18,)
+        Binned C_ell values corresponding to ELL_EFF.
+    """
+
+    # 1) C_ell on the internal ell grid used by the integrator
+    ell = get_ell_range()  # (n_ell_compute,)
+    C_yy = compute_integral_snr_simple_uRC(
+        params_values_dict=params_values_dict,
+        q_obs=q_obs,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )  # (n_ell_compute,)
+
+    # 2) Bin to 18 using the ONE shared binning scheme
+    C_yy_binned = bin_Cl_to_18(ell, C_yy, Nsub=Nsub)  # (18,)
+
+    return C_yy_binned
+
+
+@partial(jax.jit, static_argnames=("n_grid", "nsig"))
+def _pdet_grid_from_qbar(
+    qbar_grid,
+    *,
+    sigma_lnY,
+    q_cat,
+    n_grid=4096,
+    nsig=16.0,
+):
+    """
+    Build P_det(M,z) on the same (z,m) grid as qbar_grid, using the same
+    convention as the cluster-count completeness code:
+
+        P_det = [ ∫ dt exp(-(t-μ)^2/(2σ^2)) * g(q_cat - exp(t)) ] / (2*sqrt(2π)*σ)
+
+    where μ=ln(qbar), σ=sigma_lnY, and g(x)=1-erf(x/√2).
+    """
+    qbar_flat = qbar_grid.reshape(-1)
+    raw = jax.vmap(
+        lambda qb: completeness_convolution_jax(
+            qb, sigma_lnY, q_cat, n_grid=n_grid, nsig=nsig
+        )
+    )(qbar_flat)
+    norm = 2.0 * jnp.sqrt(2.0 * jnp.pi) * sigma_lnY
+    return (raw / norm).reshape(qbar_grid.shape)
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "n_grid",
+        "nsig",
+    ),
+)
+def compute_integral_completeness_uRC(
+    params_values_dict=None,
+    *,
+    q_cat,
+    sigma_lnY,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    n_grid=4096,
+    nsig=16.0,
+):
+    """
+    Unresolved (masked) tSZ power spectrum using the *full* completeness with intrinsic scatter.
+
+    This replaces the step-function mask W=Θ(q_cat - SNR) with
+        W_unres(M,z) = 1 - P_det(M,z),
+    where P_det(M,z) is computed by convolving intrinsic log-scatter in q (sigma_lnY)
+    with the catalog selection at threshold q_cat via completeness_convolution_jax().
+
+    Returns
+    -------
+    C_yy_unres : (n_ell,) jnp.ndarray
+        Unresolved tSZ power spectrum C_ell^{yy} for the masked map.
+    """
+    # --- reproduce the exact grids used in get_integral_grid
+    allparams = classy_sz.get_all_relevant_params(params_values_dict=params_values_dict)
+    z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
+    m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
+    logm_grid = jnp.log(m_grid)
+
+    # --- base integrand (n_z, n_m, n_ell)
+    integrand = get_integral_grid(params_values_dict=params_values_dict)
+
+    # --- mean SNR field qbar(M,z) and completeness P_det(M,z)
+    qbar_grid = build_snr_grid(
+        m_grid,
+        z_grid,
+        params_values_dict,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )  # (n_z, n_m)
+
+    P_det = _pdet_grid_from_qbar(
+        qbar_grid,
+        sigma_lnY=sigma_lnY,
+        q_cat=q_cat,
+        n_grid=n_grid,
+        nsig=nsig,
+    )  # (n_z, n_m)
+
+    # unresolved mask: keep *undetected* halos
+    mask_mz = 1.0 - P_det
+    integrand = integrand * mask_mz[:, :, None]
+
+    # --- integrate over m and z for each ell
+    return _integrate_mz(integrand, z_grid, logm_grid)
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "scale_1e12",
+    ),
+)
+def compute_integral_snr_simple_uRC_binned(
+    params_values_dict=None,
+    *,
+    q_obs=None,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    scale_1e12=True,
+):
+    """
+    Returns binned D_ell (18,) for the UNRESOLVED (uRC) tSZ map.
+    Uses: interpolate C_ell -> D_ell -> bin D_ell on integer ell in each bin.
+    """
+    ell = get_ell_range()  # internal smooth ell grid
+
+    C_yy = compute_integral_snr_simple_uRC(
+        params_values_dict=params_values_dict,
+        q_obs=q_obs,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )  # (n_ell,)
+
+    # bin in D_ell (computed from interpolated C_ell)
+    Dl_binned = bin_Dl_to_18(ell, C_yy, scale_1e12=scale_1e12)  # (18,)
+    return Dl_binned
+
+
+
 
 def compute_integral_snr_simple_RC(
     params_values_dict=None,
@@ -818,31 +1070,27 @@ def compute_tsz_covariance_masked_snr(
         den += w
     sigma_skyavg = num / den  # (ntheta,)
 
-    log_theta_grid = jnp.log(theta_grid)
+    # ------------------------------------------------------------------
+    # 1) sigma(theta500): use polynomial fit in log-log (same as compute_sigma_y0)
+    #    to match compute_integral_snr_simple_uRC exactly.
+    # ------------------------------------------------------------------
     eps = 1e-20
-    log_sigma_skyavg = jnp.log(jnp.clip(sigma_skyavg, eps, None))
+    x = jnp.log(theta_grid)
+    y = jnp.log(jnp.clip(sigma_skyavg, eps, None))
+    poly_deg = 3  # match compute_sigma_y0 default
+    coeff = jnp.polyfit(x, y, deg=poly_deg)
 
-    # ------------------------------------------------------------------
-    # 1) JAX-safe log-log interp/extrap + sigma(theta500)
-    # ------------------------------------------------------------------
-    @jax.jit
-    def _interp_lin_extrap(xg, yg, xq):
-        # piecewise linear interpolation with linear extrapolation
-        i = jnp.searchsorted(xg, xq, side="right") - 1
-        i = jnp.clip(i, 0, xg.size - 2)
-        x0 = xg[i]
-        x1 = xg[i + 1]
-        y0 = yg[i]
-        y1 = yg[i + 1]
-        t = (xq - x0) / (x1 - x0)
-        return y0 + t * (y1 - y0)
+    def polyval(c, xx):
+        out = jnp.zeros_like(xx)
+        for ck in c:
+            out = out * xx + ck
+        return out
 
     @jax.jit
     def sigma_y0_from_theta500(theta500_arcmin):
-        # log-log interpolation/extrapolation
-        xi = jnp.log(theta500_arcmin)
-        log_sig = _interp_lin_extrap(log_theta_grid, log_sigma_skyavg, xi)
-        return jnp.exp(log_sig)
+        log_theta_q = jnp.log(theta500_arcmin)
+        log_sigma_q = polyval(coeff, log_theta_q)
+        return jnp.exp(log_sigma_q)
 
     @jax.jit
     def theta_q_minus_snr(snr_grid, q, at=0.0):
@@ -1036,27 +1284,25 @@ def compute_trispectrum_masked_snr(
         den += w
     sigma_skyavg = num / den
 
-    log_theta_grid = jnp.log(theta_grid)
+    # --- 1) sigma(theta500): use polynomial fit in log-log (same as compute_sigma_y0)
+    #    to match compute_integral_snr_simple_uRC exactly. ---
     eps = 1e-20
-    log_sigma_skyavg = jnp.log(jnp.clip(sigma_skyavg, eps, None))
+    x = jnp.log(theta_grid)
+    y = jnp.log(jnp.clip(sigma_skyavg, eps, None))
+    poly_deg = 3  # match compute_sigma_y0 default
+    coeff = jnp.polyfit(x, y, deg=poly_deg)
 
-    # --- 1) JAX-safe log-log interp/extrap (same as in your covariance func) ---
-    @jax.jit
-    def _interp_lin_extrap(xg, yg, xq):
-        i = jnp.searchsorted(xg, xq, side="right") - 1
-        i = jnp.clip(i, 0, xg.size - 2)
-        x0 = xg[i]
-        x1 = xg[i + 1]
-        y0 = yg[i]
-        y1 = yg[i + 1]
-        t = (xq - x0) / (x1 - x0)
-        return y0 + t * (y1 - y0)
+    def polyval(c, xx):
+        out = jnp.zeros_like(xx)
+        for ck in c:
+            out = out * xx + ck
+        return out
 
     @jax.jit
     def sigma_y0_from_theta500(theta500_arcmin):
-        xi = jnp.log(theta500_arcmin)
-        log_sig = _interp_lin_extrap(log_theta_grid, log_sigma_skyavg, xi)
-        return jnp.exp(log_sig)
+        log_theta_q = jnp.log(theta500_arcmin)
+        log_sigma_q = polyval(coeff, log_theta_q)
+        return jnp.exp(log_sigma_q)
 
     @jax.jit
     def _theta_q_minus_snr(snr_grid, q, at=0.0):

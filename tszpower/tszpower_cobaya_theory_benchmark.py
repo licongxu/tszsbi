@@ -8,12 +8,15 @@ foreground residuals.
 from cobaya.theory import Theory
 # import tszpower
 from .config import classy_sz
+from .tsz import compute_integral_binned
 from .power_spectra import compute_Dell_yy
 from .initialise import initialise
-from .utils import get_ell_range
+from .utils import get_ell_range, ELL_EFF
 import numpy as np
 import time
 import os
+from scipy.interpolate import interp1d
+
 
 ###########################################################################
 # tSZ Power Spectrum Theory Module
@@ -97,7 +100,11 @@ class tSZ_PS_Theory(Theory):
         
         # Retrieve the multipole array and compute the tSZ power spectrum.
         # ell = get_ell_range()
-        dl_total = compute_Dell_yy(params_value_dict=updated_pars)
+        # dl_total = compute_Dell_yy(params_value_dict=updated_pars)
+        cl_total = compute_integral_binned(params_values_dict=updated_pars)
+        # Convert C_ell to D_ell.
+        dl_total = ELL_EFF * (ELL_EFF + 1.0) / (2.0 * np.pi) * cl_total * 1e12  # Dl
+
 
         # For this example, assume the entire signal is from the 1-halo term.
         cl_1h = dl_total
@@ -144,6 +151,32 @@ class tSZ_FG_Theory(Theory):
         self.A_RS_MODEL  = D_fg[:, 2]
         self.A_IR_MODEL  = D_fg[:, 3]
         self.A_CN_MODEL  = D_fg[:, 4]
+        # Target ell grid used everywhere else (same grid as the likelihood/model)
+        # Assumption: your likelihood expects D_ell on get_ell_range().
+        # self.ell_model = get_ell_range()
+        self.ell_model = ELL_EFF
+
+        # Interpolate templates (defined on self.fg_ell) onto ell_model.
+        # Use log-log for positive templates for stability; fall back to linear if needed.
+        def _loglog_interp(x, y):
+            # guard: y must be strictly positive for log interpolation
+            y_clip = np.clip(y, 1e-300, None)
+            f = interp1d(np.log(x), np.log(y_clip), kind="linear",
+                         bounds_error=False, fill_value=-np.inf)
+            return np.exp(f(np.log(self.ell_model)))
+
+        # Build interpolated templates on ell_model (D_ell units preserved)
+        self.A_CIB_on_model = _loglog_interp(self.fg_ell, self.A_CIB_MODEL)
+        self.A_RS_on_model  = _loglog_interp(self.fg_ell, self.A_RS_MODEL)
+        self.A_IR_on_model  = _loglog_interp(self.fg_ell, self.A_IR_MODEL)
+
+        # Ensure anything out of range becomes exactly 0 (exp(-inf)=0 already, but keep robust)
+        for name in ["A_CIB_on_model", "A_RS_on_model", "A_IR_on_model"]:
+            arr = getattr(self, name)
+            arr[~np.isfinite(arr)] = 0.0
+            setattr(self, name, arr)
+
+
         self._current_state = {}
 
     def calculate(self, state, want_derived=False, **params_values):
@@ -154,8 +187,15 @@ class tSZ_FG_Theory(Theory):
         # A_CN is fixed (from external calibration)
         A_cn = 0.9033
         # Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL + A_cn * self.A_CN_MODEL
-        Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL
-        state["Cl_sz_foreground"] = Cl_fg
+        # Cl_fg = A_cib * self.A_CIB_MODEL + A_rs * self.A_RS_MODEL + A_ir * self.A_IR_MODEL
+        # state["Cl_sz_foreground"] = Cl_fg
+        D_ell_fg = (
+            A_cib * self.A_CIB_on_model
+            + A_rs * self.A_RS_on_model
+            + A_ir * self.A_IR_on_model
+        )
+        state["Cl_sz_foreground"] = D_ell_fg
+
         self._current_state = state
         self.log.info("SZ foreground computed.")
 

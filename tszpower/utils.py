@@ -1,37 +1,41 @@
 import jax.numpy as jnp
 import jax.random as random
 
+ELL_MIN = jnp.array([  9,  12,  16,  21,  27,  35,  46,  60,  78,
+                      102, 133, 173, 224, 292, 380, 494, 642, 835 ], dtype=jnp.float32)
+ELL_MAX = jnp.array([ 12,  16,  21,  27,  35,  46,  60,  78, 102,
+                      133, 173, 224, 292, 380, 494, 642, 835,1085 ], dtype=jnp.float32)
+ELL_EFF = jnp.array([ 10.0, 13.5, 18.0, 23.5, 30.5, 40.0, 52.5, 68.5, 89.5,
+                      117.0,152.5,198.0,257.5,335.5,436.5,567.5,738.0,959.5 ], dtype=jnp.float32)
+
+
 def get_ell_range():
-    # # Predefined list of ell values
-    # ell_eval = jnp.array([
-    #     10., 13.5, 18., 23.5, 30.5, 40., 52.5, 68.5, 89.5, 
-    #     117., 152.5, 198., 257.5, 335.5, 436.5, 567.5, 738., 959.5,
-    #     1000., 1020., 1040., 1060., 1085.
     
     # ell_eval = jnp.array([10., 13.5, 18., 23.5, 30.5, 40., 52.5, 68.5, 89.5, 
     #                      117., 152.5, 198., 257.5, 335.5, 436.5, 567.5, 738., 959.5,1247.5])
-    ell_eval = jnp.array([10., 13.5, 18., 23.5, 30.5, 40., 52.5, 68.5, 89.5, 
-                         117., 152.5, 198., 257.5, 335.5, 436.5, 567.5, 738., 959.5])
+    # ell_eval = jnp.array([10., 13.5, 18., 23.5, 30.5, 40., 52.5, 68.5, 89.5, 
+    #                      117., 152.5, 198., 257.5, 335.5, 436.5, 567.5, 738., 959.5])
 
     # ell_eval = jnp.logspace(jnp.log10(10.), jnp.log10(8000.), num=30)
+
+    # Choose a coarse grid for *computing* the theory spectrum
+    # (you can tune num; 60-120 is usually plenty)
+
+    ell_eval = jnp.geomspace(ELL_MIN[0], ELL_MAX[-1], 50).astype(jnp.float32)
+
    
 
-    # ELL_MIN = jnp.array([  9,  12,  16,  21,  27,  35,  46,  60,  78,
-    #                   102, 133, 173, 224, 292, 380, 494, 642, 835 ])
-    # ELL_MAX = jnp.array([ 12,  16,  21,  27,  35,  46,  60,  78, 102,
-    #                   133, 173, 224, 292, 380, 494, 642, 835,1085 ])
-    # ell_eval = 0.5 * (ELL_MIN + ELL_MAX)
 
     return ell_eval
 
 def get_ell_binwidth():
-    delta_ell = jnp.array([3., 4., 5., 6., 8., 11., 14., 18., 24., 31., 40., 51., 68., 88., 114., 148.,
-                           193., 250.])
+    # delta_ell = jnp.array([3., 4., 5., 6., 8., 11., 14., 18., 24., 31., 40., 51., 68., 88., 114., 148.,
+    #                        193., 250.])
 
     # delta_ell = jnp.array([3., 4., 5., 6., 8., 11., 14., 18., 24., 31., 40., 51., 68., 88., 114., 148.,
     #                        193., 250., 326.])
-    # ell_eval = get_ell_range()
-    # delta_ell = jnp.diff(ell_eval)
+    ell_eval = get_ell_range()
+    delta_ell = jnp.diff(ell_eval)
 
     
     return delta_ell
