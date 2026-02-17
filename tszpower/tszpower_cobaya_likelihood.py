@@ -15,26 +15,36 @@ class tSZ_PS_Likelihood(Likelihood):
     # Variables set via the YAML file.
     data_directory: str = "data"  
     data_file: str = "data_ps-ell-y2-erry2_total-planck-collab-15.txt"
-    use_covariance: bool = False  
-    cov_file: str = None  
+    use_covariance: bool = False
+    cov_file: str = None
 
     def initialize(self):
         # Load the data file.
         data_path = os.path.join(self.data_directory, self.data_file)
         D = np.loadtxt(data_path)
-        # Expected format: Column 0: ℓ; Column 1: observed power spectrum; Column 2: error (sigma).
+        # Supported formats:
+        #   - 2 columns: ell, Cl_obs
+        #   - 3 columns: ell, Cl_obs, sigma
         self.ell_data = D[:, 0]
         self.cl_obs = D[:, 1]
-        self.sigma_obs = D[:, 2]
+        self.sigma_obs = D[:, 2] if D.shape[1] >= 3 else None
 
-        # Build a diagonal covariance matrix if no external covariance is provided.
-        if self.cov_file is None:
-            self.covmat = np.diag(self.sigma_obs**2)
-            print("Gaussian covariance matrix is used.")
-        else:
+        # Covariance handling:
+        # - If cov_file is provided, always load it.
+        # - Else if sigma column is present, build diagonal covariance.
+        # - Else raise an informative error (2-column data without cov_file).
+        if self.cov_file is not None:
             cov_path = os.path.join(self.data_directory, self.cov_file)
             self.covmat = np.loadtxt(cov_path)
-            print("Trispectrum is used.")
+            print("External covariance matrix is used.")
+        elif self.sigma_obs is not None:
+            self.covmat = np.diag(self.sigma_obs**2)
+            print("Diagonal covariance from data sigma column is used.")
+        else:
+            raise ValueError(
+                "tSZ_PS_Likelihood: data_file has no sigma column and no cov_file was provided. "
+                "For 2-column data (ell, Cl), set cov_file in YAML."
+            )
 
         # Pre-compute inverse and determinant.
         self.inv_covmat = np.linalg.inv(self.covmat)

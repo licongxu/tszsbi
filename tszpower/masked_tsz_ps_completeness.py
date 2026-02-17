@@ -43,8 +43,8 @@ from functools import partial
 
 # --- intra-package imports (building blocks already in tszpower) -----------
 from . import classy_sz
-from .utils import get_ell_range, simpson
-from .tsz import get_integral_grid
+from .utils import get_ell_range, simpson, get_ell_binwidth
+from .tsz import get_integral_grid, get_integral_grid_trisp
 from .maskedpower import (
     build_snr_grid,
     completeness_convolution_jax,
@@ -353,3 +353,315 @@ def compute_masked_tsz_Dell_binned(
     # Bin C_ell -> D_ell in 18 bands (interpolate, convert, average)
     D_ell_binned = bin_Dl_to_18(ell, C_ell, scale_1e12=scale_1e12)  # (18,)
     return D_ell_binned
+
+
+# ---------------------------------------------------------------------------
+#  Trispectrum with double-scatter completeness (GNFW)
+# ---------------------------------------------------------------------------
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "n_grid",
+        "nsig",
+    ),
+)
+def compute_masked_tsz_trispectrum(
+    params_values_dict=None,
+    *,
+    q_cat,
+    sigma_lnY,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    n_grid=4096,
+    nsig=16.0,
+):
+    r"""
+    1-halo trispectrum T_{ell, ell'} for the **unresolved** (masked) tSZ map
+    using the full double-scatter completeness function.
+
+    The weight at each (M, z) is  1 - P_det(M, z; q_cat, sigma_lnY),
+    where P_det convolves intrinsic log-normal scatter (sigma_lnY) with
+    Gaussian instrumental noise scatter.
+
+    .. math::
+
+        T_{\ell,\ell'}^{\rm unres} = \int dz \int d\ln M \;
+            y_\ell^2 \, y_{\ell'}^2 \; \frac{dn}{d\ln M} \frac{dV}{dz\,d\Omega}
+            \; \bigl[1 - P_{\rm det}(M,z)\bigr]
+
+    Parameters
+    ----------
+    params_values_dict : dict
+        Cosmological + scaling-relation parameters.
+    q_cat : float
+        Catalogue SNR detection threshold.
+    sigma_lnY : float
+        Intrinsic log-normal scatter width.
+
+    Returns
+    -------
+    ell_arr : (n_ell,) jnp.ndarray
+    T_unres : (n_ell, n_ell) jnp.ndarray
+    """
+    allparams = classy_sz.get_all_relevant_params(
+        params_values_dict=params_values_dict
+    )
+    z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
+    m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
+    logm_grid = jnp.log(m_grid)
+
+    # Base trispectrum integrand (all halos, original GNFW amplitude)
+    ell_arr, integrand = get_integral_grid_trisp(
+        params_values_dict=params_values_dict
+    )  # (n_z, n_m, n_ell, n_ell)
+
+    # Mean SNR grid
+    qbar_grid = build_snr_grid(
+        m_grid, z_grid, params_values_dict,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )  # (n_z, n_m)
+
+    # Detection probability with double-scatter completeness
+    P_det = _pdet_grid(
+        qbar_grid,
+        sigma_lnY=sigma_lnY,
+        q_cat=q_cat,
+        n_grid=n_grid,
+        nsig=nsig,
+    )  # (n_z, n_m)
+
+    # Unresolved mask
+    mask_mz = 1.0 - P_det
+    integrand = integrand * mask_mz[:, :, None, None]
+
+    # Integrate over mass then redshift
+    partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z, n_ell, n_ell)
+    T_unres = simpson(partial_m, x=z_grid, axis=0)        # (n_ell, n_ell)
+
+    return ell_arr, T_unres
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "n_grid",
+        "nsig",
+    ),
+)
+def compute_scaled_masked_tsz_trispectrum(
+    params_values_dict=None,
+    *,
+    q_cat,
+    sigma_lnY,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    n_grid=4096,
+    nsig=16.0,
+):
+    r"""
+    Scaled masked trispectrum for D_ell = ell(ell+1) C_ell / (2pi),
+    with double-scatter completeness.
+
+    Returns
+    -------
+    ell_arr : (n_ell,)
+    scaled_T : (n_ell, n_ell)
+        T_{ll'} * [l(l+1) l'(l'+1)] / (2pi)^2 * 1e24
+    """
+    ell_arr, T_unres = compute_masked_tsz_trispectrum(
+        params_values_dict=params_values_dict,
+        q_cat=q_cat, sigma_lnY=sigma_lnY,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min, theta_max=theta_max,
+        n_grid=n_grid, nsig=nsig,
+    )
+    ell_factor = ell_arr * (ell_arr + 1.0)
+    ell2D_factor = jnp.outer(ell_factor, ell_factor)
+    prefactor = 1.0 / ((2.0 * jnp.pi) ** 2)
+    return ell_arr, T_unres * ell2D_factor * prefactor * 1e24
+
+
+# ---------------------------------------------------------------------------
+#  Covariance with double-scatter completeness (GNFW)
+# ---------------------------------------------------------------------------
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "n_grid",
+        "nsig",
+    ),
+)
+def compute_masked_tsz_covariance(
+    params_values_dict=None,
+    *,
+    q_cat,
+    sigma_lnY,
+    noise_ell=None,
+    f_sky=1.0,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    n_grid=4096,
+    nsig=16.0,
+):
+    r"""
+    Full covariance of the masked (unresolved) tSZ C_ell using
+    double-scatter completeness.
+
+    .. math::
+
+        M_{\ell\ell'} = \frac{1}{4\pi f_{\rm sky}}
+            \left[
+                \frac{4\pi\,(C_\ell + N_\ell)^2}{(\ell+0.5)\,\Delta\ell}
+                \;\delta_{\ell\ell'}
+                + T_{\ell\ell'}^{\rm unres}
+            \right]
+
+    Returns
+    -------
+    ell_arr : (n_ell,)
+    M       : (n_ell, n_ell)  full covariance (Gaussian + trispectrum)
+    M_G     : (n_ell, n_ell)  Gaussian-only covariance
+    """
+    allparams = classy_sz.get_all_relevant_params(
+        params_values_dict=params_values_dict
+    )
+    z_grid = jnp.geomspace(allparams["z_min"], allparams["z_max"], 100)
+    m_grid = jnp.geomspace(allparams["M_min"], allparams["M_max"], 100)
+    logm_grid = jnp.log(m_grid)
+    ell_arr = get_ell_range()
+
+    # Mean SNR grid
+    qbar_grid = build_snr_grid(
+        m_grid, z_grid, params_values_dict,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min,
+        theta_max=theta_max,
+    )
+
+    # Detection probability
+    P_det = _pdet_grid(
+        qbar_grid,
+        sigma_lnY=sigma_lnY,
+        q_cat=q_cat,
+        n_grid=n_grid,
+        nsig=nsig,
+    )
+    mask_mz = 1.0 - P_det  # (n_z, n_m)
+
+    # --- Masked power spectrum C_ell ---
+    integrand_C = get_integral_grid(
+        params_values_dict=params_values_dict
+    )  # (n_z, n_m, n_ell)
+    integrand_C = integrand_C * mask_mz[:, :, None]
+    C_yy_mask = _integrate_mz(integrand_C, z_grid, logm_grid)  # (n_ell,)
+
+    # --- Masked trispectrum T_{ell,ell'} ---
+    _, integrand_T = get_integral_grid_trisp(
+        params_values_dict=params_values_dict
+    )  # (n_z, n_m, n_ell, n_ell)
+    integrand_T = integrand_T * mask_mz[:, :, None, None]
+
+    partial_m = simpson(integrand_T, x=logm_grid, axis=1)
+    T_mask = simpson(partial_m, x=z_grid, axis=0)  # (n_ell, n_ell)
+
+    # --- Assemble covariance ---
+    delta_ell = get_ell_binwidth()
+    if noise_ell is None:
+        noise_ell = jnp.zeros_like(C_yy_mask)
+
+    diag_term = (4.0 * jnp.pi) * (C_yy_mask + noise_ell) ** 2 / (ell_arr + 0.5)
+    M_G = jnp.diag(diag_term) / (4.0 * jnp.pi * f_sky * delta_ell)
+    M = M_G + T_mask / (4.0 * jnp.pi * f_sky)
+
+    return ell_arr, M, M_G
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "sigma_obj_file",
+        "skyfr_file",
+        "filter_name",
+        "theta_min",
+        "theta_max",
+        "n_grid",
+        "nsig",
+    ),
+)
+def compute_scaled_masked_tsz_covariance(
+    params_values_dict=None,
+    *,
+    q_cat,
+    sigma_lnY,
+    noise_ell=None,
+    f_sky=1.0,
+    sigma_obj_file="/scratch/scratch-lxu/tszsbi/noise_files/sigma_dict_szifi.npy",
+    skyfr_file="/scratch/scratch-lxu/tszsbi/noise_files/skyfracs_szifi_cosmology.npy",
+    filter_name="immf6",
+    theta_min=0.5,
+    theta_max=32.0,
+    n_grid=4096,
+    nsig=16.0,
+):
+    r"""
+    Scaled covariance for D_ell = ell(ell+1) C_ell / (2pi), on
+    an SNR-masked (unresolved) tSZ map with double-scatter completeness.
+
+    Returns
+    -------
+    ell_arr : (n_ell,)
+    M_D     : (n_ell, n_ell)  covariance of D_ell  [*1e24]
+    M_DG    : (n_ell, n_ell)  Gaussian-only         [*1e24]
+    """
+    ell_arr, M_C, M_CG = compute_masked_tsz_covariance(
+        params_values_dict=params_values_dict,
+        q_cat=q_cat, sigma_lnY=sigma_lnY,
+        noise_ell=noise_ell, f_sky=f_sky,
+        sigma_obj_file=sigma_obj_file,
+        skyfr_file=skyfr_file,
+        filter_name=filter_name,
+        theta_min=theta_min, theta_max=theta_max,
+        n_grid=n_grid, nsig=nsig,
+    )
+
+    s = ell_arr * (ell_arr + 1.0) / (2.0 * jnp.pi)
+    S2D = jnp.outer(s, s)
+
+    M_D  = S2D * M_C * 1e24
+    M_DG = S2D * M_CG * 1e24
+
+    return ell_arr, M_D, M_DG
