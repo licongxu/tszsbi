@@ -115,6 +115,90 @@ def _integrate_mz(integrand, z_grid, logm_grid):
     return C_yy  # (n_ell,)
 
 
+@partial(jax.jit, static_argnames=("n_power", "n_grid", "nsig"))
+def _conditional_An_undetected_batch(
+    qbar_flat, sigma_lnY, q_cat, *, n_power=2, n_grid=1024, nsig=8.0,
+):
+    r"""
+    Conditional n-th moment  :math:`\langle A^n\,\mathbf{1}(q_{\rm obs}<q_{\rm cut})\rangle`
+    for each (M, z) point — **no vmap**.
+
+    When the Compton-y profile has lognormal intrinsic scatter
+    :math:`y_\ell = A\,\tilde y_{\ell,0}` with
+    :math:`\ln A \sim \mathcal{N}(0, \sigma_{\ln Y}^2)`,
+    the masked 1-halo integrand that goes as :math:`A^n` must be weighted
+    by this conditional moment rather than :math:`1 - P_{\rm det}`.
+
+    Use ``n_power=2`` for the power spectrum (:math:`|y_\ell|^2`)
+    and ``n_power=4`` for the trispectrum
+    (:math:`|y_\ell|^2\,|y_{\ell'}|^2`).
+
+    .. math::
+
+        \langle A^n\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+        = \frac{1}{\sqrt{2\pi}}
+          \int du\; e^{-u^2/2}\; e^{n\,\sigma_{\ln Y}\,u}\;
+          \Phi\!\bigl(q_{\rm cut} - e^{\sigma_{\ln Y}\,u}\,\bar q_m\bigr)
+
+    where :math:`u = \ln A / \sigma_{\ln Y}` is the standardised scatter
+    variable and :math:`\Phi` is the standard-normal CDF.
+
+    Parameters
+    ----------
+    qbar_flat : (N,) array
+        Mean (theory) SNR for each (M, z) point.
+    sigma_lnY : float
+        Intrinsic log-normal scatter width.
+    q_cat : float
+        SNR detection threshold.
+    n_power : int
+        Power of A in the moment (2 for PS, 4 for trispectrum).
+    n_grid : int
+        Number of quadrature points.
+    nsig : float
+        Integration range in units of sigma_lnY.
+
+    Returns
+    -------
+    cond_An : (N,) array
+        Conditional n-th moment at each point.
+    """
+    import jax.scipy.special as jsp
+
+    u = jnp.linspace(-nsig, nsig, n_grid)                  # (n_grid,)
+    du = u[1] - u[0]
+    gauss = jnp.exp(-0.5 * u * u)                          # (n_grid,)
+    A_n = jnp.exp(n_power * sigma_lnY * u)                 # (n_grid,)
+
+    mu = jnp.log(jnp.maximum(qbar_flat, 1e-30))            # (N,)
+    q_m = jnp.exp(mu[:, None] + sigma_lnY * u[None, :])    # (N, n_grid)
+
+    arg = (q_cat - q_m) / jnp.sqrt(2.0)                    # (N, n_grid)
+    Phi = 0.5 * (1.0 + jsp.erf(arg))                       # (N, n_grid)
+
+    integrand = gauss[None, :] * A_n[None, :] * Phi         # (N, n_grid)
+
+    raw = jnp.trapezoid(integrand, dx=du, axis=1)           # (N,)
+    return raw / jnp.sqrt(2.0 * jnp.pi)
+
+
+@partial(jax.jit, static_argnames=("n_power", "n_grid", "nsig"))
+def _conditional_An_undetected_grid(
+    qbar_grid, *, sigma_lnY, q_cat, n_power=2, n_grid=1024, nsig=8.0,
+):
+    """
+    Conditional n-th moment <A^n * 1(q_obs < q_cut)> on a (n_z, n_m) grid.
+
+    n_power=2 for the power spectrum, n_power=4 for the trispectrum.
+    """
+    qbar_flat = qbar_grid.reshape(-1)
+    result_flat = _conditional_An_undetected_batch(
+        qbar_flat, sigma_lnY, q_cat,
+        n_power=n_power, n_grid=n_grid, nsig=nsig,
+    )
+    return result_flat.reshape(qbar_grid.shape)
+
+
 # ---------------------------------------------------------------------------
 #  Public functions
 # ---------------------------------------------------------------------------
@@ -141,23 +225,36 @@ def compute_masked_tsz_ps(
     filter_name="immf6",
     theta_min=0.5,
     theta_max=32.0,
-    n_grid=4096,
-    nsig=16.0,
+    n_grid=1024,
+    nsig=18.0,
 ):
-    """
+    r"""
     Compute the **unresolved** (masked) tSZ angular power spectrum C_ell
-    using the full double-scatter completeness function.
+    using the conditional second moment for lognormal intrinsic scatter.
 
-    The completeness accounts for:
-      - intrinsic log-normal scatter (sigma_lnY) in the Y--M relation
-      - Gaussian instrumental noise scatter (unit variance in SNR space)
+    Because the 1-halo tSZ power spectrum involves :math:`|\tilde y_\ell|^2`
+    and the signal amplitude has lognormal scatter
+    :math:`\ln A \sim \mathcal{N}(0,\,\sigma_{\ln Y}^2)`, the correct
+    masked integrand uses the **conditional second moment** rather than
+    a simple :math:`1 - P_{\rm det}` factor:
 
-    The mask weight at each (M, z) is:
+    .. math::
 
-        W_unres(M, z) = 1 - P_det(M, z; q_cat, sigma_lnY)
+        C_\ell^{yy,\,\mathrm{unres}}
+        = \int dz\;\frac{d^2V}{dz\,d\Omega}
+          \int dM\;\frac{dn}{dM}\;
+          |\tilde y_{\ell,0}(M,z)|^2\;
+          \langle A^2\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
 
-    so that only the *undetected* (low-SNR) halos contribute to the
-    residual power spectrum.
+    where
+
+    .. math::
+
+        \langle A^2\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+        = \int d\ln A\;\mathcal{N}(\ln A;\,0,\,\sigma_{\ln Y}^2)\;
+          A^2\;\Phi(q_{\rm cut} - A\,\bar q_m)
+
+    and :math:`\Phi` is the standard-normal CDF.
 
     Parameters
     ----------
@@ -208,18 +305,18 @@ def compute_masked_tsz_ps(
         theta_max=theta_max,
     )  # (n_z, n_m)
 
-    # --- 4. Detection probability P_det(M, z) ---------------------------
-    P_det = _pdet_grid(
+    # --- 4. Conditional second moment <A^2 * 1(q_obs < q_cut)> ----------
+    cond_A2 = _conditional_An_undetected_grid(
         qbar_grid,
         sigma_lnY=sigma_lnY,
         q_cat=q_cat,
+        n_power=2,
         n_grid=n_grid,
         nsig=nsig,
     )  # (n_z, n_m)
 
-    # --- 5. Apply unresolved mask: keep *undetected* halos ---------------
-    mask_mz = 1.0 - P_det  # (n_z, n_m)
-    integrand = integrand * mask_mz[:, :, None]  # broadcast over ell
+    # --- 5. Weight integrand by conditional second moment ----------------
+    integrand = integrand * cond_A2[:, :, None]  # broadcast over ell
 
     # --- 6. Integrate over (lnM, z) for each ell ------------------------
     return _integrate_mz(integrand, z_grid, logm_grid)  # (n_ell,)
@@ -386,17 +483,27 @@ def compute_masked_tsz_trispectrum(
 ):
     r"""
     1-halo trispectrum T_{ell, ell'} for the **unresolved** (masked) tSZ map
-    using the full double-scatter completeness function.
+    with lognormal intrinsic scatter in the y-profile amplitude.
 
-    The weight at each (M, z) is  1 - P_det(M, z; q_cat, sigma_lnY),
-    where P_det convolves intrinsic log-normal scatter (sigma_lnY) with
-    Gaussian instrumental noise scatter.
+    Because the trispectrum involves
+    :math:`|y_\ell|^2\,|y_{\ell'}|^2 \propto A^4`,
+    the correct masked integrand uses the **conditional fourth moment**:
 
     .. math::
 
-        T_{\ell,\ell'}^{\rm unres} = \int dz \int d\ln M \;
-            y_\ell^2 \, y_{\ell'}^2 \; \frac{dn}{d\ln M} \frac{dV}{dz\,d\Omega}
-            \; \bigl[1 - P_{\rm det}(M,z)\bigr]
+        T_{\ell,\ell'}^{\rm unres}
+        = \int dz \int d\ln M \;
+          |\tilde y_{\ell,0}|^2\,|\tilde y_{\ell',0}|^2
+          \;\frac{dn}{d\ln M}\;\frac{dV}{dz\,d\Omega}\;
+          \langle A^4\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+
+    where
+
+    .. math::
+
+        \langle A^4\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+        = \int d\ln A\;\mathcal{N}(\ln A;\,0,\,\sigma_{\ln Y}^2)\;
+          A^4\;\Phi(q_{\rm cut} - A\,\bar q_m)
 
     Parameters
     ----------
@@ -434,18 +541,17 @@ def compute_masked_tsz_trispectrum(
         theta_max=theta_max,
     )  # (n_z, n_m)
 
-    # Detection probability with double-scatter completeness
-    P_det = _pdet_grid(
+    # Conditional fourth moment <A^4 * 1(q_obs < q_cut)>
+    cond_A4 = _conditional_An_undetected_grid(
         qbar_grid,
         sigma_lnY=sigma_lnY,
         q_cat=q_cat,
+        n_power=4,
         n_grid=n_grid,
         nsig=nsig,
     )  # (n_z, n_m)
 
-    # Unresolved mask
-    mask_mz = 1.0 - P_det
-    integrand = integrand * mask_mz[:, :, None, None]
+    integrand = integrand * cond_A4[:, :, None, None]
 
     # Integrate over mass then redshift
     partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z, n_ell, n_ell)
@@ -572,28 +678,38 @@ def compute_masked_tsz_covariance(
         theta_max=theta_max,
     )
 
-    # Detection probability
-    P_det = _pdet_grid(
+    # Conditional second moment <A^2 * 1(undetected)> for power spectrum
+    cond_A2 = _conditional_An_undetected_grid(
         qbar_grid,
         sigma_lnY=sigma_lnY,
         q_cat=q_cat,
+        n_power=2,
         n_grid=n_grid,
         nsig=nsig,
-    )
-    mask_mz = 1.0 - P_det  # (n_z, n_m)
+    )  # (n_z, n_m)
 
-    # --- Masked power spectrum C_ell ---
+    # Conditional fourth moment <A^4 * 1(undetected)> for trispectrum
+    cond_A4 = _conditional_An_undetected_grid(
+        qbar_grid,
+        sigma_lnY=sigma_lnY,
+        q_cat=q_cat,
+        n_power=4,
+        n_grid=n_grid,
+        nsig=nsig,
+    )  # (n_z, n_m)
+
+    # --- Masked power spectrum C_ell (conditional second moment) ---
     integrand_C = get_integral_grid(
         params_values_dict=params_values_dict
     )  # (n_z, n_m, n_ell)
-    integrand_C = integrand_C * mask_mz[:, :, None]
+    integrand_C = integrand_C * cond_A2[:, :, None]
     C_yy_mask = _integrate_mz(integrand_C, z_grid, logm_grid)  # (n_ell,)
 
-    # --- Masked trispectrum T_{ell,ell'} ---
+    # --- Masked trispectrum T_{ell,ell'} (conditional fourth moment) ---
     _, integrand_T = get_integral_grid_trisp(
         params_values_dict=params_values_dict
     )  # (n_z, n_m, n_ell, n_ell)
-    integrand_T = integrand_T * mask_mz[:, :, None, None]
+    integrand_T = integrand_T * cond_A4[:, :, None, None]
 
     partial_m = simpson(integrand_T, x=logm_grid, axis=1)
     T_mask = simpson(partial_m, x=z_grid, axis=0)  # (n_ell, n_ell)

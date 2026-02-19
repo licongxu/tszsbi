@@ -285,6 +285,90 @@ def _pdet_grid(
     return P_det_flat.reshape(qbar_grid.shape)
 
 
+@partial(jax.jit, static_argnames=("n_power", "n_grid", "nsig"))
+def _conditional_An_undetected_batch(
+    qbar_flat, sigma_lnY, q_cat, *, n_power=2, n_grid=1024, nsig=8.0,
+):
+    r"""
+    Conditional n-th moment  :math:`\langle A^n\,\mathbf{1}(q_{\rm obs}<q_{\rm cut})\rangle`
+    for each (M, z) point — **no vmap**.
+
+    When the Compton-y profile has lognormal intrinsic scatter
+    :math:`y_\ell = A\,\tilde y_{\ell,0}` with
+    :math:`\ln A \sim \mathcal{N}(0, \sigma_{\ln Y}^2)`,
+    the masked 1-halo integrand that goes as :math:`A^n` must be weighted
+    by this conditional moment rather than :math:`1 - P_{\rm det}`.
+
+    Use ``n_power=2`` for the power spectrum (:math:`|y_\ell|^2`)
+    and ``n_power=4`` for the trispectrum
+    (:math:`|y_\ell|^2\,|y_{\ell'}|^2`).
+
+    .. math::
+
+        \langle A^n\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+        = \frac{1}{\sqrt{2\pi}}
+          \int du\; e^{-u^2/2}\; e^{n\,\sigma_{\ln Y}\,u}\;
+          \Phi\!\bigl(q_{\rm cut} - e^{\sigma_{\ln Y}\,u}\,\bar q_m\bigr)
+
+    where :math:`u = \ln A / \sigma_{\ln Y}` is the standardised scatter
+    variable and :math:`\Phi` is the standard-normal CDF.
+
+    Parameters
+    ----------
+    qbar_flat : (N,) array
+        Mean (theory) SNR for each (M, z) point.
+    sigma_lnY : float
+        Intrinsic log-normal scatter width.
+    q_cat : float
+        SNR detection threshold.
+    n_power : int
+        Power of A in the moment (2 for PS, 4 for trispectrum).
+    n_grid : int
+        Number of quadrature points.
+    nsig : float
+        Integration range in units of sigma_lnY.
+
+    Returns
+    -------
+    cond_An : (N,) array
+        Conditional n-th moment at each point.
+    """
+    import jax.scipy.special as jsp
+
+    u = jnp.linspace(-nsig, nsig, n_grid)                  # (n_grid,)
+    du = u[1] - u[0]
+    gauss = jnp.exp(-0.5 * u * u)                          # (n_grid,)
+    A_n = jnp.exp(n_power * sigma_lnY * u)                 # (n_grid,)
+
+    mu = jnp.log(jnp.maximum(qbar_flat, 1e-30))            # (N,)
+    q_m = jnp.exp(mu[:, None] + sigma_lnY * u[None, :])    # (N, n_grid)
+
+    arg = (q_cat - q_m) / jnp.sqrt(2.0)                    # (N, n_grid)
+    Phi = 0.5 * (1.0 + jsp.erf(arg))                       # (N, n_grid)
+
+    integrand = gauss[None, :] * A_n[None, :] * Phi         # (N, n_grid)
+
+    raw = jnp.trapezoid(integrand, dx=du, axis=1)           # (N,)
+    return raw / jnp.sqrt(2.0 * jnp.pi)
+
+
+@partial(jax.jit, static_argnames=("n_power", "n_grid", "nsig"))
+def _conditional_An_undetected_grid(
+    qbar_grid, *, sigma_lnY, q_cat, n_power=2, n_grid=1024, nsig=8.0,
+):
+    """
+    Conditional n-th moment <A^n * 1(q_obs < q_cut)> on a (n_z, n_m) grid.
+
+    n_power=2 for the power spectrum, n_power=4 for the trispectrum.
+    """
+    qbar_flat = qbar_grid.reshape(-1)
+    result_flat = _conditional_An_undetected_batch(
+        qbar_flat, sigma_lnY, q_cat,
+        n_power=n_power, n_grid=n_grid, nsig=nsig,
+    )
+    return result_flat.reshape(qbar_grid.shape)
+
+
 # ===================================================================
 #  3. Full-sky (unmasked) tSZ power spectrum
 # ===================================================================
@@ -698,16 +782,31 @@ def compute_masked_tsz_ps_parametric(
 ):
     r"""
     Unresolved (masked) tSZ C_ell with parametric amplitude and
-    full double-scatter completeness.
+    lognormal intrinsic scatter in the y-profile amplitude.
+
+    Because the 1-halo tSZ power spectrum involves :math:`|\tilde y_\ell|^2`
+    and the signal amplitude has lognormal scatter
+    :math:`\ln A \sim \mathcal{N}(0,\,\sigma_{\ln Y}^2)`, the correct
+    masked integrand uses the **conditional second moment** rather than
+    a simple :math:`1 - P_{\rm det}` factor:
 
     .. math::
 
-        C_\ell^{\rm unres} = \int dz \int d\ln M \;
-            \bigl[y_\ell^2 \; dn/d\ln M \; dV/dz/d\Omega\bigr]
-            \times \bigl[1 - P_{\rm det}(M,z)\bigr]
+        C_\ell^{yy,\,\mathrm{unres}}
+        = \int dz\;\frac{d^2V}{dz\,d\Omega}
+          \int dM\;\frac{dn}{dM}\;
+          |\tilde y_{\ell,0}(M,z)|^2\;
+          \langle A^2\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
 
-    Both the tSZ integrand (via ratio^2) and the SNR entering P_det
-    (via ratio) use the parametric amplitude.
+    where
+
+    .. math::
+
+        \langle A^2\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+        = \int d\ln A\;\mathcal{N}(\ln A;\,0,\,\sigma_{\ln Y}^2)\;
+          A^2\;\Phi(q_{\rm cut} - A\,\bar q_m)
+
+    and :math:`\Phi` is the standard-normal CDF.
 
     Parameters
     ----------
@@ -739,7 +838,7 @@ def compute_masked_tsz_ps_parametric(
     )
     integrand = integrand * (ratio_grid[:, :, None] ** 2)
 
-    # --- Parametric SNR grid -> detection probability ---
+    # --- Parametric SNR grid ---
     qbar_grid = build_snr_grid_parametric(
         m_grid, z_grid, A_SZ, alpha_SZ, params_values_dict,
         sigma_obj_file=sigma_obj_file,
@@ -749,14 +848,13 @@ def compute_masked_tsz_ps_parametric(
         theta_max=theta_max,
     )
 
-    P_det = _pdet_grid(
+    # --- Conditional second moment <A^2 * 1(q_obs < q_cut)> ---
+    cond_A2 = _conditional_An_undetected_grid(
         qbar_grid, sigma_lnY=sigma_lnY, q_cat=q_cat,
-        n_grid=n_grid, nsig=nsig,
+        n_power=2, n_grid=n_grid, nsig=nsig,
     )
 
-    # --- Unresolved mask: keep undetected halos ---
-    mask_mz = 1.0 - P_det
-    integrand = integrand * mask_mz[:, :, None]
+    integrand = integrand * cond_A2[:, :, None]
 
     return _integrate_mz(integrand, z_grid, logm_grid)
 
@@ -1338,18 +1436,28 @@ def compute_masked_tsz_trispectrum_parametric(
 ):
     r"""
     1-halo trispectrum for the **unresolved** tSZ map with parametric
-    amplitude and full double-scatter completeness.
+    amplitude and lognormal intrinsic scatter.
 
-    The integrand y_ell^2 * y_ell'^2 is rescaled by ratio(M,z)^4 and
-    weighted by  1 - P_det(M, z; q_cat, sigma_lnY).
+    Because the trispectrum involves
+    :math:`|y_\ell|^2\,|y_{\ell'}|^2 \propto A^4`,
+    the correct masked integrand uses the **conditional fourth moment**:
 
     .. math::
 
-        T_{\ell,\ell'}^{\rm unres} = \int dz \int d\ln M \;
-            \bigl[\mathrm{ratio}^4\bigr] \;
-            y_\ell^2 \, y_{\ell'}^2 \; \frac{dn}{d\ln M}
-            \frac{dV}{dz\,d\Omega}
-            \; \bigl[1 - P_{\rm det}(M,z)\bigr]
+        T_{\ell,\ell'}^{\rm unres}
+        = \int dz \int d\ln M \;
+          \mathrm{ratio}^4\;
+          |\tilde y_{\ell,0}|^2\,|\tilde y_{\ell',0}|^2
+          \;\frac{dn}{d\ln M}\;\frac{dV}{dz\,d\Omega}\;
+          \langle A^4\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+
+    where
+
+    .. math::
+
+        \langle A^4\,\mathbf{1}(q_{\rm obs} < q_{\rm cut})\rangle
+        = \int d\ln A\;\mathcal{N}(\ln A;\,0,\,\sigma_{\ln Y}^2)\;
+          A^4\;\Phi(q_{\rm cut} - A\,\bar q_m)
 
     Parameters
     ----------
@@ -1385,7 +1493,7 @@ def compute_masked_tsz_trispectrum_parametric(
     )  # (n_z, n_m)
     integrand = integrand * (ratio_grid[:, :, None, None] ** 4)
 
-    # Parametric SNR grid -> detection probability (double-scatter)
+    # Parametric SNR grid
     qbar_grid = build_snr_grid_parametric(
         m_grid, z_grid, A_SZ, alpha_SZ, params_values_dict,
         sigma_obj_file=sigma_obj_file,
@@ -1395,17 +1503,17 @@ def compute_masked_tsz_trispectrum_parametric(
         theta_max=theta_max,
     )  # (n_z, n_m)
 
-    P_det = _pdet_grid(
+    # Conditional fourth moment <A^4 * 1(q_obs < q_cut)>
+    cond_A4 = _conditional_An_undetected_grid(
         qbar_grid,
         sigma_lnY=sigma_lnY,
         q_cat=q_cat,
+        n_power=4,
         n_grid=n_grid,
         nsig=nsig,
     )  # (n_z, n_m)
 
-    # Unresolved mask
-    mask_mz = 1.0 - P_det
-    integrand = integrand * mask_mz[:, :, None, None]
+    integrand = integrand * cond_A4[:, :, None, None]
 
     # Integrate over mass then redshift
     partial_m = simpson(integrand, x=logm_grid, axis=1)  # (n_z, n_ell, n_ell)
@@ -1525,30 +1633,41 @@ def compute_masked_tsz_covariance_parametric(
         theta_min=theta_min,
         theta_max=theta_max,
     )
-    P_det = _pdet_grid(
+    # Conditional second moment <A^2 * 1(undetected)> for power spectrum
+    cond_A2 = _conditional_An_undetected_grid(
         qbar_grid,
         sigma_lnY=sigma_lnY,
         q_cat=q_cat,
+        n_power=2,
         n_grid=n_grid,
         nsig=nsig,
-    )
-    mask_mz = 1.0 - P_det  # (n_z, n_m)
+    )  # (n_z, n_m)
 
-    # --- Masked power spectrum C_ell: ratio^2 * integrand * mask ---
+    # Conditional fourth moment <A^4 * 1(undetected)> for trispectrum
+    cond_A4 = _conditional_An_undetected_grid(
+        qbar_grid,
+        sigma_lnY=sigma_lnY,
+        q_cat=q_cat,
+        n_power=4,
+        n_grid=n_grid,
+        nsig=nsig,
+    )  # (n_z, n_m)
+
+    # --- Masked power spectrum C_ell: ratio^2 * integrand * <A^2 * 1(undet)> ---
     integrand_C = get_integral_grid(
         params_values_dict=params_values_dict
     )  # (n_z, n_m, n_ell)
-    integrand_C = integrand_C * (ratio_grid[:, :, None] ** 2) * mask_mz[:, :, None]
+    integrand_C = integrand_C * (ratio_grid[:, :, None] ** 2) * cond_A2[:, :, None]
     C_yy_mask = _integrate_mz(integrand_C, z_grid, logm_grid)  # (n_ell,)
 
-    # --- Masked trispectrum T_{ell,ell'}: ratio^4 * integrand * mask ---
+    # --- Masked trispectrum T_{ell,ell'}: ratio^4 * integrand * <A^4 * 1(undet)> ---
     _, integrand_T = get_integral_grid_trisp(
         params_values_dict=params_values_dict
     )  # (n_z, n_m, n_ell, n_ell)
     integrand_T = (
         integrand_T
         * (ratio_grid[:, :, None, None] ** 4)
-        * mask_mz[:, :, None, None]
+        * cond_A4[:, :, None, None]
     )
 
     partial_m = simpson(integrand_T, x=logm_grid, axis=1)

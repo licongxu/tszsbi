@@ -1446,7 +1446,7 @@ def completeness_convolution_jax(
     sigma_lnY,      # scatter in ln space
     q_cat,          # catalog SNR threshold
     *,
-    n_grid=1024,    # number of t points for integration
+    n_grid=2048,    # number of t points for integration
     nsig=16.0,       # integrate ±nsig*σ in ln q
 ):
     """
